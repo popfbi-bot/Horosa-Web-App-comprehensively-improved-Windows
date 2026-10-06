@@ -1,0 +1,23 @@
+diff --git a/astrostudysrv/boundless/src/main/java/boundless/log/AppLoggers.java b/astrostudysrv/boundless/src/main/java/boundless/log/AppLoggers.java
+index 217b2b73..1f434bd7 100644
+--- a/astrostudysrv/boundless/src/main/java/boundless/log/AppLoggers.java
++++ b/astrostudysrv/boundless/src/main/java/boundless/log/AppLoggers.java
+@@ -181,7 +181,18 @@ public class AppLoggers {
+ 	 * 形如 ${env:HOME:-${sys:user.home}}/...,不递归替换),拿它拼路径会在进程 CWD 下造出同名字面目录;
+ 	 * 必须经 StrSubstitutor 递归替换,替换失败或仍含 ${ 时退回 user.home 下的缺省目录。
+ 	 */
++	// HOROSA_LOG_BASEDIR_REV log_basedir_v1 —— Windows 桌面日志目录:启动器(桌面壳 / 本地版脚本)传入的
++	// -Dhorosa.log.basedir 优先(Java 日志与壳日志同落应用数据目录 logs/,诊断导出与「打开日志目录」都指向那里);
++	// 无该 -D 时走下面上游的 ${basedir} 递归替换 + user.home 兜底,行为与上游逐字一致 → 服务器/mac 部署零变化。
++	// 常量兼作重建 jar 的存在性哨兵标记(release_selfcheck 验发货 jar 内含此串,防止同步冲掉本残差)。
++	public static final String HOROSA_LOG_BASEDIR_REV = "log_basedir_v1";
++
+ 	static String resolvedBaseDir(){
++		String prop = System.getProperty("horosa.log.basedir");
++		if(!StringUtility.isNullOrEmpty(prop)){
++			String p = prop.replace('\\', '/');
++			return p.endsWith("/") ? p : p + "/";
++		}
+ 		String b = null;
+ 		try{
+ 			b = config.getStrSubstitutor().replace("${basedir}");

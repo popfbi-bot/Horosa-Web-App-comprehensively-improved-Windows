@@ -1,0 +1,79 @@
+diff --git a/astrostudyui/src/components/cntradition/Gods.js b/astrostudyui/src/components/cntradition/Gods.js
+index 5ed25a3b..80104b7c 100644
+--- a/astrostudyui/src/components/cntradition/Gods.js
++++ b/astrostudyui/src/components/cntradition/Gods.js
+@@ -1,8 +1,10 @@
+ import { Component } from 'react';
+ import { Row, Col } from 'antd';
+ import { XQCard as Card } from '../xq-ui';
+-import { randomStr } from '../../utils/helper';
+ import styles from '../../css/styles.less';
++// horosa_stable_react_keys_v1(PERF-R9):本文件的 React key 已从 randomStr(8) 改为内容派生的稳定 key。
++// 随机 key 每次渲染都变 → React 无法 diff → 整棵子树卸载重建。此标记供 apply.sh 的
++// 幂等守卫与发布哨兵定位;删除它会让重同步后无法自动还原本改动。
+ 
+ function safeArray(value){
+ 	return Array.isArray(value) ? value : [];
+@@ -27,9 +29,10 @@ class Gods extends Component{
+ 		let ganCols = this.genGods(rec.stem, '天干');
+ 		let ziCols = this.genGods(rec.branch, '地支');
+ 		let doms = [];
++		// 整柱/天干/地支/太岁 四段各最多入 doms 一次,故字面量键即稳定且互不重复。
+ 		if(cols){
+ 			let row = (
+-				<Row gutter={12} key={randomStr(8)}>
++				<Row gutter={12} key="pillar">
+ 					{cols}
+ 				</Row>
+ 			);
+@@ -37,7 +40,7 @@ class Gods extends Component{
+ 		}
+ 		if(ganCols){
+ 			let row = (
+-				<Row gutter={12} key={randomStr(8)}>
++				<Row gutter={12} key="stem">
+ 					{ganCols}
+ 				</Row>
+ 			);
+@@ -45,7 +48,7 @@ class Gods extends Component{
+ 		}
+ 		if(ziCols){
+ 			let row = (
+-				<Row gutter={12} key={randomStr(8)}>
++				<Row gutter={12} key="branch">
+ 					{ziCols}
+ 				</Row>
+ 			);
+@@ -63,16 +66,16 @@ class Gods extends Component{
+ 			spans.push(span);
+ 		}
+ 		if(spans.length > 0){
+-			let title = (<Col key={randomStr(8)} span={4}>太岁：</Col>);
++			let title = (<Col key="title" span={4}>太岁：</Col>);
+ 			taisuiCols.push(title);
+ 			let content = (
+-				<Col key={randomStr(8)} span={20}>{spans}</Col>
++				<Col key="content" span={20}>{spans}</Col>
+ 			);
+ 			taisuiCols.push(content);
+ 		}
+ 		if(taisuiCols.length > 0){
+ 			let row = (
+-				<Row gutter={12} key={randomStr(8)}>
++				<Row gutter={12} key="taisui">
+ 					{taisuiCols}
+ 				</Row>
+ 			);
+@@ -116,10 +119,10 @@ class Gods extends Component{
+ 			spans.push(span);
+ 		}
+ 		if(spans.length > 0){
+-			let title = (<Col key={randomStr(8)} span={4}>{titleStr}：</Col>);
++			let title = (<Col key="title" span={4}>{titleStr}：</Col>);
+ 			cols.push(title);
+ 			let content = (
+-				<Col key={randomStr(8)} span={20}>{spans}</Col>
++				<Col key="content" span={20}>{spans}</Col>
+ 			);
+ 			cols.push(content);
+ 		}

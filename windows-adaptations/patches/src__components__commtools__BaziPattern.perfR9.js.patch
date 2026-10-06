@@ -1,0 +1,25 @@
+diff --git a/astrostudyui/src/components/commtools/BaziPattern.js b/astrostudyui/src/components/commtools/BaziPattern.js
+index d3a586ff..c75b08be 100644
+--- a/astrostudyui/src/components/commtools/BaziPattern.js
++++ b/astrostudyui/src/components/commtools/BaziPattern.js
+@@ -356,12 +356,16 @@ export default class BaziPattern extends Component{
+     }
+ 
+     changeAttribute(key, val){
+-        let st = this.state;
+-        st[key] = val;
+-        this.setState(st, ()=>{
++        // horosa_no_state_mutation_v1:原实现是 `let st = this.state; st[key] = val; this.setState(st)`
++        // —— 直接**就地改写 this.state**。三重害处:① 当前 state 在 setState 之前就已被改掉,
++        // sCU/componentDidUpdate 拿到的 prevState 与 nextState 是同一个对象,任何「引用变了吗」
++        // 的比较(本仓 sCU 的通用范式)一律判「没变」→ 该更新时不更新;② 把整份 state 当补丁回传,
++        // 未来新增的瞬态字段会被无意义地重写一遍;③ React 严格模式下属未定义行为。
++        // 改为只提交单键补丁,值语义完全不变(setState 浅合并结果与原来逐字一致)。
++        this.setState({ [key]: val }, ()=>{
+             this.saveState();
+         });
+-       
++
+     }
+ 
+     genDom(){

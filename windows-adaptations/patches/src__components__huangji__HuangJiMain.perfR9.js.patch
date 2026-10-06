@@ -1,0 +1,94 @@
+diff --git a/astrostudyui/src/components/huangji/HuangJiMain.js b/astrostudyui/src/components/huangji/HuangJiMain.js
+index e6d37921..dd64bd67 100644
+--- a/astrostudyui/src/components/huangji/HuangJiMain.js
++++ b/astrostudyui/src/components/huangji/HuangJiMain.js
+@@ -19,6 +19,8 @@ import { formatHumanValue } from '../../utils/humanReadableFields';
+ import { defaultAfter23NewDay, defaultLateZiHourUseNextDay } from '../../utils/dayBoundary';
+ import { parseDateParts } from '../../utils/dateStrSafe';
+ import { definePageSettings } from '../../utils/pageSettingsStore';
++import { markPanelReady } from '../../utils/perfMark';
++import { FreezeSubTab } from '../comp/FreezeInactive';
+ 
+ const { Option } = Select;
+ const { TabPane } = Tabs;
+@@ -552,6 +554,23 @@ class HuangJiMain extends Component{
+ 		});
+ 	}
+ 
++	// horosa_prefetch_registry_v1(PERF-R10 P6):供 CnYiBuMain 'cnyibu' 预取器按活跃子页转发。
++	// 只报 pan(单阶段、确定性);构参走 buildPanPayload 与 fetchPan 单源(含 slimClassics=1)
++	// ⇒ 缓存键逐字节同键;典籍正文由上游 loadClassicFull 模块缓存按需取,不需预取。
++	getStepPrefetchTasks(steppedFields){
++		try{
++			if(!parseFieldsDateTime(steppedFields)){ return []; }
++			const payload = this.buildPanPayload(steppedFields);
++			return [{
++				name: 'wangji',
++				path: '/wangji/pan',
++				run: ()=> postWangJi('pan', payload).catch(()=>{ /* 预取失败静默 */ }),
++			}];
++		}catch(e){
++			return [];
++		}
++	}
++
+ 	async fetchPan(fields){
+ 		const payload = this.buildPanPayload(fields);
+ 		if(!payload){
+@@ -572,6 +591,8 @@ class HuangJiMain extends Component{
+ 				return;
+ 			}
+ 			this.setState({ pan, xinyi, loading: false }, ()=>{
++				// horosa_panel_ready_v1:主盘 + 心易同批落定 = 中栏与右栏画完的那一次 setState。
++				markPanelReady('cnyibu');
+ 				const snapOpts = { classicSectionIndex: this.state.classicSectionIndex };
+ 				saveModuleAISnapshotLazy('huangji', ()=>buildSnapshotText(pan, xinyi, snapOpts));
+ 			});
+@@ -972,23 +993,38 @@ class HuangJiMain extends Component{
+ 		return (
+ 			<Tabs activeKey={activeKey} onChange={this.setRightPanelTab} defaultActiveKey="overview" tabPosition="top" className="horosa-huangji-tabs">
+ 				<TabPane tab="概览" key="overview">
+-					<div className="horosa-huangji-section-list">
+-						{this.renderRows(pan ? (pan.sections || []).slice(0, 2) : [])}
+-					</div>
++					{/* horosa_freeze_subtabs_v1:右栏非激活子页冻结重渲(冻结≠卸载,切回即拿最新 children) */}
++					<FreezeSubTab active={activeKey === 'overview'}>{() => (
++						<div className="horosa-huangji-section-list">
++							{this.renderRows(pan ? (pan.sections || []).slice(0, 2) : [])}
++						</div>
++					)}</FreezeSubTab>
+ 				</TabPane>
+ 				<TabPane tab="卦象" key="gua">
+-					<div className="horosa-huangji-section-list">
+-						{this.renderRows(pan ? (pan.sections || []).slice(2, 4) : [])}
+-					</div>
++					{/* horosa_freeze_subtabs_v1:右栏非激活子页冻结重渲(冻结≠卸载,切回即拿最新 children) */}
++					<FreezeSubTab active={activeKey === 'gua'}>{() => (
++						<div className="horosa-huangji-section-list">
++							{this.renderRows(pan ? (pan.sections || []).slice(2, 4) : [])}
++						</div>
++					)}</FreezeSubTab>
+ 				</TabPane>
+ 				<TabPane tab="心易" key="xinyi">
+-					<div className="horosa-huangji-section-list">{this.renderXinyi()}</div>
++					{/* horosa_freeze_subtabs_v1:右栏非激活子页冻结重渲(冻结≠卸载,切回即拿最新 children) */}
++					<FreezeSubTab active={activeKey === 'xinyi'}>{() => (
++						<div className="horosa-huangji-section-list">{this.renderXinyi()}</div>
++					)}</FreezeSubTab>
+ 				</TabPane>
+ 				<TabPane tab="经典" key="classics">
+-					<div className="horosa-huangji-section-list">{this.renderClassics()}</div>
++					{/* horosa_freeze_subtabs_v1:右栏非激活子页冻结重渲(冻结≠卸载,切回即拿最新 children) */}
++					<FreezeSubTab active={activeKey === 'classics'}>{() => (
++						<div className="horosa-huangji-section-list">{this.renderClassics()}</div>
++					)}</FreezeSubTab>
+ 				</TabPane>
+ 				<TabPane tab="年表" key="history">
+-					<div className="horosa-huangji-section-list">{this.renderHistory()}</div>
++					{/* horosa_freeze_subtabs_v1:右栏非激活子页冻结重渲(冻结≠卸载,切回即拿最新 children) */}
++					<FreezeSubTab active={activeKey === 'history'}>{() => (
++						<div className="horosa-huangji-section-list">{this.renderHistory()}</div>
++					)}</FreezeSubTab>
+ 				</TabPane>
+ 			</Tabs>
+ 		);

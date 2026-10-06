@@ -1,0 +1,47 @@
+diff --git a/astrostudyui/src/components/astro/AstroFirdaria.js b/astrostudyui/src/components/astro/AstroFirdaria.js
+index e04d5228..0ee6b85e 100644
+--- a/astrostudyui/src/components/astro/AstroFirdaria.js
++++ b/astrostudyui/src/components/astro/AstroFirdaria.js
+@@ -1,6 +1,5 @@
+ import { Component } from 'react';
+ import { Row, Col, Divider, } from 'antd';
+-import {randomStr} from '../../utils/helper';
+ import * as AstroConst from '../../constants/AstroConst';
+ import * as AstroText from '../../constants/AstroText';
+ import * as AstroHelper from './AstroHelper';
+@@ -10,6 +9,10 @@ import { isMeaningEnabled, wrapWithMeaning, } from './AstroMeaningPopover';
+ import styles from '../../css/styles.less';
+ import { XQTable as Table } from '../xq-ui';
+ import { getFirdariaInterp } from '../../utils/firdariaInterp';
++import { markPanelReady } from '../../utils/perfMark';
++// horosa_stable_react_keys_v1(PERF-R9):本文件的 React key 已从 randomStr(8) 改为内容派生的稳定 key。
++// 随机 key 每次渲染都变 → React 无法 diff → 整棵子树卸载重建。此标记供 apply.sh 的
++// 幂等守卫与发布哨兵定位;删除它会让重同步后无法自动还原本改动。
+ 
+ class AstroFirdaria extends Component{
+ 
+@@ -52,6 +55,15 @@ class AstroFirdaria extends Component{
+ 			this.showMeaning = this.showMeaning.bind(this);
+ 		}
+ 
++	// horosa_panel_ready_v1:本技法无自有请求 —— 法达运期表整份来自 chartObj.predictives.firdaria,
++	// 「数据落定」就是拿到新盘对象后的这一次渲染提交(markPanelReady 内部再等双 rAF 逼近「已绘」)。
++	// 故接在 componentDidUpdate 的 value 变更分支上,与带回调的技法同口径。
++	componentDidUpdate(prevProps){
++		if(prevProps.value !== this.props.value){
++			markPanelReady('direction');
++		}
++	}
++
+ 	showMeaning(){
+ 		return isMeaningEnabled(this.props.showAstroMeaning);
+ 	}
+@@ -94,7 +106,7 @@ class AstroFirdaria extends Component{
+ 
+ 	genFirdariaDom(ds){
+ 		let dom = (
+-			<Table key={randomStr(8)}
++			<Table key='firdaria-table'
+ 				dataSource={ds} 
+ 				columns={this.state.columns} 
+ 				rowKey='date'

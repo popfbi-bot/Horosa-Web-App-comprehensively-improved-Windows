@@ -1,0 +1,14 @@
+diff --git a/astrostudyui/src/components/homepage/PageHeader.js b/astrostudyui/src/components/homepage/PageHeader.js
+index df02a759..fc69ea52 100644
+--- a/astrostudyui/src/components/homepage/PageHeader.js
++++ b/astrostudyui/src/components/homepage/PageHeader.js
+@@ -42,7 +42,8 @@ import { openExternalUrl, hasTauriInvoke, invokeDesktopCommand } from '../../uti
+ import styles from './PageHeader.less';
+ import { getLayoutViewportWidth } from '../../utils/shellZoom';
+ 
+-const HOROSA_OFFICIAL_REPO = 'https://github.com/Horace-Maxwell/Horosa-Web-App-comprehensively-improved-MacOS';
++// Windows 发行版:「关于」内的法律文档与官方下载渠道指向本平台仓库(windows-adaptations #23)。
++const HOROSA_OFFICIAL_REPO = 'https://github.com/Horace-Maxwell/Horosa-Web-App-comprehensively-improved-Windows';
+ const HOROSA_LEGAL_URL = `${HOROSA_OFFICIAL_REPO}/tree/main/docs/legal`;
+ const HOROSA_RELEASES_URL = `${HOROSA_OFFICIAL_REPO}/releases`;
+ function openHorosaLink(url){

@@ -1,0 +1,2089 @@
+import { Component } from 'react';
+import { classicalBackendOverridesFromPlain } from '../../utils/classicalChartGlobals';
+import { CLASSICAL_PARAM_SPEC, CLASSICAL_SPEC_KEYS } from '../../utils/classicalParamSpec';   // [Q-217/T-171] 古典口径全键单源
+import { userAyanParamsFrom } from '../../utils/customCalibreStores';   // [Q-217/T-172] 'user' 恒星黄道历元参数
+import { wrapperPropsEqual } from '../../utils/chartUpdateGuard';
+import { Row, Col, } from 'antd';
+import { XQButton as Button, XQCard as Card, XQSelect as Select, XQTabs as Tabs } from '../xq-ui';
+import XQIcon from '../xq-icons';
+import QuickDockBar from '../common/QuickDockBar';
+import AstroChartMain from '../astro/AstroChartMain';
+import GeoCoordModal from '../amap/GeoCoordModal';
+import SuZhanMain from '../suzhan/SuZhanMain';
+// 🔴 3D 盘必须懒加载,绝不可改回静态 import(与星运页同族病灶,2026-08-01 一并治理):
+//   静态引它 → AstroChartMain3D → AstroChart3D → Astro3D → three + OrbitControls/GLTFLoader/
+//   DRACOLoader/Stats/lil-gui/FontLoader + 两个大 JSON 字体&模型资产,整条链成为本页 chunk 的
+//   **同步依赖** —— 进节气页(24 节气各自的星盘/宿盘页签)就得先解析完这一大坨,而只有「3D盘」
+//   那个页签用得着。本页已有 render3d 条件门(不激活不挂载),懒化后「不打开=零成本」天然成立。
+//   注:本页无 FreezeInactive,故边界由 makeLazyBoundary 自带的 TechniqueErrorBoundary 提供。
+import { makeLazyBoundary, idleWarm } from '../../utils/lazyBoundary';
+const AstroChartMain3D = makeLazyBoundary(
+	() => import(/* webpackChunkName: "astro-chart-3d" */ '../astro3d/AstroChartMain3D'),
+	{ label: '3D 盘', tip: '3D 盘加载中…' }
+);
+import * as Constants from '../../utils/constants';
+import * as AstroConst from '../../constants/AstroConst';
+import request from '../../utils/request';
+import { gcj02ToGps, randomStr } from '../../utils/helper';
+import {convertLatStrToDegree, convertLonStrToDegree, convertLatToStr, convertLonToStr} from '../astro/AstroHelper';
+import { dstAwareZoneAt } from '../../utils/timezone';
+import styles from '../../css/styles.less';
+import DateTime from '../comp/DateTime';
+import DateTimeSelector from '../comp/DateTimeSelector';
+import { getHousesOption } from '../comp/CompHelper'
+import * as AstroText from '../../constants/AstroText';
+import * as SZConst from '../suzhan/SZConst';
+import * as Su28Helper from '../su28/Su28Helper';
+import { buildAstroSnapshotContent, } from '../../utils/astroAiSnapshot';
+import { saveModuleAISnapshot, clearModuleAISnapshot } from '../../utils/moduleAiSnapshot';
+import { setJieqiSeedLocalCache, } from '../../utils/localCalcCache';
+import { fetchPreciseJieqiYear, prefetchJieqiYearNeighbors } from '../../utils/preciseCalcBridge';
+import { defaultAfter23NewDay, defaultLateZiHourUseNextDay } from '../../utils/dayBoundary';
+import { appendPlanetHouseInfo, appendPlanetHouseInfoById, } from '../../utils/planetHouseInfo';
+import UpdatingBadge from '../common/UpdatingBadge';
+import { silentTechniquePanelsEnabled } from '../../utils/perfFlags';
+import { markPanelReady } from '../../utils/perfMark';
+
+const TabPane = Tabs.TabPane;
+
+// horosa_shallow_scu_v1:逐键浅比较。**未知即"变了"** —— 键数不同 / 任一键引用不同 → 返回 false
+// (调用方据此 return true 照常渲染)。绝不做深比较,绝不放过任何不确定的字段。
+//
+// ★复核补丁(horosa_scu_arraywise_v1):只按引用比会让本 sCU **永久空转**。
+//   pages/index.js:667 `let aryfields = convertToArray(fields);` 在 AstroIndex 每次 render 里
+//   重新建数组 → 传下来的 fieldsAry 引用恒变 → shallowSame 恒 false → sCU 恒返 true,
+//   等于没加。而 convertToArray 只是把 fields 的**同一批子对象**塞进新数组(helper.js:548
+//   `res.push(obj[key])`),元素引用在 fields 未变时逐个不变。故对数组降一级做**逐元素引用**比:
+//   长度相等且每个元素 === → 判同。这仍然是纯引用语义(不看元素内部字段),
+//   与"宁可多渲、绝不漏渲"取向一致 —— 元素对象只要被换过引用就立刻判"变了"。
+//   同款问题在 utils/chartUpdateGuard.js 的 wrapperPropsEqual 上也存在(它对 fieldsAry 走
+//   Object.is),那是共享件、不在本轮授权范围,已在汇报里点名交主控。
+function sameArrayByRef(a, b){
+	if(a.length !== b.length){ return false; }
+	for(let i=0; i<a.length; i++){
+		if(a[i] !== b[i]){ return false; }
+	}
+	return true;
+}
+function shallowSame(a, b){
+	if(a === b){ return true; }
+	if(!a || !b || typeof a !== 'object' || typeof b !== 'object'){ return false; }
+	const ka = Object.keys(a);
+	const kb = Object.keys(b);
+	if(ka.length !== kb.length){ return false; }
+	for(let i=0; i<ka.length; i++){
+		const k = ka[i];
+		if(!Object.prototype.hasOwnProperty.call(b, k)){ return false; }
+		if(a[k] === b[k]){ continue; }
+		if(Array.isArray(a[k]) && Array.isArray(b[k]) && sameArrayByRef(a[k], b[k])){ continue; }
+		return false;
+	}
+	return true;
+}
+const {Option, OptGroup} = Select
+const JIEQI_STD = [
+	'小寒', '大寒', '立春', '雨水', '惊蛰', '春分',
+	'清明', '谷雨', '立夏', '小满', '芒种', '夏至',
+	'小暑', '大暑', '立秋', '处暑', '白露', '秋分',
+	'寒露', '霜降', '立冬', '小雪', '大雪', '冬至',
+];
+
+const jieqiChartMem = {};
+const AI_EXPORT_PLANET_INFO = {
+	showHouse: 1,
+	showRuler: 1,
+};
+
+function newEmptyFields(fld){
+	const fields = {
+		...fld,
+		group: {
+			value: null,
+		},
+		memoZiWei:{
+			value: null,
+		},
+		memoBaZi:{
+			value: null,
+		},
+		memoAstro:{
+			value: null,
+		},
+		memo74:{
+			value: null,
+		},
+		memoGua:{
+			value: null,
+		},
+		memoLiuReng:{
+			value: null,
+		},
+		memoQiMeng:{
+			value: null,
+		},
+		memoSuZhan:{
+			value: null,
+		},
+
+	};
+
+	return fields;
+}
+
+function paramsToFields(params, flds){
+	let tm = new DateTime();
+	tm.setZone(params.zone);
+	const toInt = (val, defval)=>{
+		const parsed = parseInt(val, 10);
+		return Number.isNaN(parsed) ? defval : parsed;
+	};
+	const pickValue = (key, defval)=>{
+		if(params[key] !== undefined && params[key] !== null){
+			return params[key];
+		}
+		if(flds && flds[key] && flds[key].value !== undefined && flds[key].value !== null){
+			return flds[key].value;
+		}
+		return defval;
+	};
+	const pickPreferFields = (key, defval)=>{
+		if(flds && flds[key] && flds[key].value !== undefined && flds[key].value !== null){
+			return flds[key].value;
+		}
+		if(params[key] !== undefined && params[key] !== null){
+			return params[key];
+		}
+		return defval;
+	};
+	const doubingSu28Val = pickPreferFields('doubingSu28', 0);
+	// [Q-221/T-178·FT-10] 子盘 params 带 birth(交节时刻 'YYYY-MM-DD HH:mm:ss',loadJieqiChart 并入)→ 起盘时间按交节时刻;
+	// 此前恒 tm.parse(year,'YYYY')=当年 1 月 1 日 12:00 → 宿盘左栏时空面板 / 右栏概览 / 快照 [起盘信息] 都写错时刻。
+	// 无 birth(种子参数)仍按年初(零回归)。
+	if(typeof params.birth === 'string' && params.birth.trim()){
+		tm.parse(params.birth.trim());
+		if(params.ad === -1 || params.ad === '-1'){ tm.ad = -1; }
+	}else{
+		tm.parse(params.year, 'YYYY');
+	}
+	// [FT-10 ②] 宿法档 2–8(七政页写入全局)不得被夹成 0/1:state 原样发后端(盘按该档算),显示层须同档,否则下拉与
+	// 「宿法」行显示「现实距星法」而盘不是。
+	const dbs = (doubingSu28Val === true) ? 1 : toInt(doubingSu28Val, 0);
+	const fields = {
+		date: {
+			value: tm,
+		},
+		time: {
+			value: tm,
+		},
+		ad: {
+			value: tm.ad,
+		},
+		zone: {
+			value: tm.zone,
+		},
+		lat: {
+			value: params.lat,
+		},
+		lon: {
+			value: params.lon,
+		},
+		gpsLat: {
+			value: params.gpsLat,
+		},
+		gpsLon: {
+			value: params.gpsLon,
+		},
+		name: {
+			value: params.name ? params.name : null,
+		},
+		pos: {
+			value: params.pos ? params.pos : null,
+		},
+		hsys: {
+			value: params.hsys,
+		},
+		zodiacal: {
+			value: params.zodiacal,
+		},
+		siderealAyanamsa: {
+			value: params.siderealAyanamsa,
+		},
+		doubingSu28: {
+			value: dbs >= 0 && dbs <= 8 ? dbs : 0,
+		},
+		houseStartMode: {
+			value: toInt(pickPreferFields('houseStartMode', SZConst.SZHouseStart_Bazi), SZConst.SZHouseStart_Bazi) === SZConst.SZHouseStart_ASC
+				? SZConst.SZHouseStart_ASC : SZConst.SZHouseStart_Bazi,
+		},
+		szchart: {
+			value: toInt(pickPreferFields('szchart', SZConst.SZChart.chart), SZConst.SZChart.chart),
+		},
+		szshape: {
+			value: toInt(pickPreferFields('szshape', SZConst.SZChart.shape), SZConst.SZChart.shape),
+		},
+		tradition: {
+			value: 0,
+		},
+		strongRecption: {
+			value: 0,
+		},
+		simpleAsp: {
+			value: 0,
+		},
+		virtualPointReceiveAsp: {
+			value: 0,
+		},
+		predictive: {
+			value: 0,
+		},
+		pdtype: {
+			value: 0,
+		},
+		pdaspects: {
+			value: [0, 60, 90, 120, 180],
+		},
+		gender: {
+			value: toInt(pickPreferFields('gender', 1), 1),
+		},
+
+	};
+
+	if(params.year === undefined || params.year === null){
+		if(params.birth){
+			let bir = new DateTime();
+			bir.parse(params.birth, 'YYYY-MM-DD HH:mm:ss');
+			fields.date.value = bir;
+			fields.time.value = bir;
+		}	
+	}
+	if(params.zodiacal === 'Tropical'){
+		fields.zodiacal.value = 0;
+	}
+	if(params.zodiacal === 'Sidereal'){
+		fields.zodiacal.value = 1;
+	}
+
+	if(flds){
+		if(params.gpsLat === undefined || params.gpsLat === null){
+			fields.gpsLat = flds.gpsLat;
+		}
+		if(params.gpsLon === undefined || params.gpsLon === null){
+			fields.gpsLon = flds.gpsLon;
+		}
+	}
+	// [Q-217/T-171] 古典口径全键(spec 单源)随 params(前端名 / 后端名双轨)或既有 fields 进 fields:
+	// 此前一键不带 → 子盘 fields 缺古典键,AI 快照「口径自陈」行恒空。缺值不造键(缺省用户 fields 形状不变)。
+	CLASSICAL_PARAM_SPEC.forEach((s)=>{
+		const bk = s.backendKey || s.key;
+		let v = params[s.key];
+		if(v === undefined || v === null){ v = params[bk]; }
+		if((v === undefined || v === null) && flds && flds[s.key] && flds[s.key].value !== undefined && flds[s.key].value !== null){ v = flds[s.key].value; }
+		if(v !== undefined && v !== null && v !== ''){ fields[s.key] = { value: v }; }
+	});
+	['userAyanT0', 'userAyanDeg', 'customTermsDay', 'customTermsNight'].forEach((k)=>{
+		const v = pickValue(k, undefined);
+		if(v !== undefined && v !== null && v !== ''){ fields[k] = { value: v }; }
+	});
+	return fields;
+}
+
+// [Q-221/T-179·FT-11] 出生时空签名(全局 hook 用):只有它变了才允许 hook 覆盖本页年份/时区/地点。
+export function hookBirthSig(f){
+	try{
+		const d = f && f.date && f.date.value;
+		const v = (k)=>(f && f[k] ? f[k].value : undefined);
+		return [d && d.format ? d.format('YYYY/MM/DD HH:mm:ss') : `${d}`, v('ad'), v('zone'), v('lat'), v('lon'), v('gpsLat'), v('gpsLon')].join('|');
+	}catch(e){ return `err:${Date.now()}:${Math.random()}`; }
+}
+
+function fieldsToState(fields){
+	let st = {
+		time: fields.date.value,
+		ad: fields.ad.value,
+		zone: fields.zone.value,
+		lat: fields.lat.value,
+		lon: fields.lon.value,
+		hsys: fields.hsys.value,
+		zodiacal: fields.zodiacal.value, siderealAyanamsa: fields.siderealAyanamsa ? fields.siderealAyanamsa.value : '',
+		gpsLat: fields.gpsLat.value,
+		gpsLon: fields.gpsLon.value,
+		doubingSu28: fields.doubingSu28.value,
+		// 古典占星参数随分至盘透传(节气盘=标准星盘,须与主盘 fieldsToParams 同口径)。
+		// [Q-217/T-171] 键集改由 CLASSICAL_PARAM_SPEC 单源生成(全部古典键 + 自定义界表体 + 'user' 历元键):
+		// 此前手写 16 键,其余(尊贵计分/时主算法/交点尊贵/福点变体/容许度体系/相位纳入宫头…)恒走后端缺省,
+		// 非缺省全局口径用户的分至盘与主盘系统性分叉。
+		...classicalStateFromFields(fields),
+		fields: {
+			...fields
+		},
+	};
+	return st;
+}
+
+// [Q-217/T-171/T-172] fields(wrapper 形) → state 平面键:spec 全键 + 自定义界表体 + 'user' 档历元(缺=''，与旧手写形态同)。
+const CLASSICAL_STATE_KEYS = [...CLASSICAL_SPEC_KEYS, 'customTermsDay', 'customTermsNight', 'userAyanT0', 'userAyanDeg'];
+function classicalStateFromFields(fields){
+	const out = {};
+	CLASSICAL_STATE_KEYS.forEach((k)=>{
+		out[k] = fields && fields[k] && fields[k].value !== undefined && fields[k].value !== null ? fields[k].value : '';
+	});
+	return out;
+}
+// 缓存键 / 兼容判定共用的古典口径签名:按 spec 归一(仅非默认键,后端名)+ 'user' 历元 → 稳定 JSON。
+// 缺省用户恒 '{}'(旧键串仅多一段常量,内存缓存键无持久化)。
+function classicalCalibreSig(params){
+	const p = params || {};
+	const ov = classicalBackendOverridesFromPlain(p);
+	if(`${p.siderealAyanamsa}` === 'user'){
+		if(p.userAyanT0 !== undefined && p.userAyanT0 !== null && p.userAyanT0 !== ''){ ov.userAyanT0 = p.userAyanT0; }
+		if(p.userAyanDeg !== undefined && p.userAyanDeg !== null && p.userAyanDeg !== ''){ ov.userAyanDeg = p.userAyanDeg; }
+	}
+	return JSON.stringify(Object.keys(ov).sort().reduce((acc, k)=>{ acc[k] = ov[k]; return acc; }, {}));
+}
+
+// PERF-R9 Ship 7(数据层空闲预热):分至图的 /jieqi/year 年表。
+// 构参与组件 genSeedParams(=genParams(false))【逐字段同序同值】—— 经 fieldsToState 拿到
+// 与组件挂载后完全相同的取数口径,再走 fetchPreciseJieqiYear(技法自己的 L1/localStorage/
+// inflight 三层入口)⇒ 用户首点分至页即命中。
+// ⚠️ 本条是【重端点】,故在预热组里排最后一位(前面的轻端点先付,交互随时让路)。
+// silent(fetchPreciseJieqiYear 内置)、丢结果、绝不 dispatch/setState;失败静默。
+export async function warmJieqiYear(fields){
+	try{
+		if(!fields || !fields.date || !fields.date.value || !fields.date.value.format){
+			return null;
+		}
+		const st = fieldsToState(fields);
+		if(!st || !st.time || typeof st.time.format !== 'function'){
+			return null;
+		}
+		return await fetchPreciseJieqiYear({
+			year: st.time.format('YYYY'),
+			ad: st.ad,
+			zone: st.zone,
+			lon: st.lon,
+			lat: st.lat,
+			hsys: st.hsys,
+			zodiacal: st.zodiacal,
+			siderealAyanamsa: st.siderealAyanamsa,
+			gpsLat: st.gpsLat,
+			gpsLon: st.gpsLon,
+			doubingSu28: st.doubingSu28,
+			after23NewDay: defaultAfter23NewDay(),
+			lateZiHourUseNextDay: defaultLateZiHourUseNextDay(),
+		});
+	}catch(e){
+		return null;   // 预热失败静默:首点回到冷即付的现状
+	}
+}
+
+function getSeedCacheKey(params){
+	return [
+		params && params.year,
+		params && params.ad,
+		params && params.zone,
+		params && params.lon,
+		params && params.lat,
+		params && params.gpsLon,
+		params && params.gpsLat,
+	].join('|');
+}
+
+function getChartCacheKey(params, term, birth){
+	return [
+		getSeedCacheKey(params),
+		term,
+		birth,
+		params && params.hsys,
+		params && params.zodiacal,
+		params && params.siderealAyanamsa,
+		params && params.doubingSu28,
+		params && params.termsVariant,
+		params && params.triplicity,
+		params && params.lotReversal,
+		params && params.westNodeType,
+		params && params.sectBuffer,
+		params && params.leoBoundFirst,
+		classicalCalibreSig(params),   // [Q-217/T-176] 十余个古典键进请求体却不进缓存键 → 改设置不重取;现 spec 全键签名
+		params && params.after23NewDay,          // [Q-424/T-389] 日界 / 晚子时进缓存键(否则改全局后仍拿旧盘)
+		params && params.lateZiHourUseNextDay,
+	].join('|');
+}
+
+function splitBirthToDateTime(birth){
+	const txt = `${birth || ''}`.trim();
+	const parts = txt.split(' ');
+	const date = parts[0] || '';
+	const time = parts[1] || '00:00:00';
+	return { date, time };
+}
+
+function normalizeGanZi(txt){
+	const raw = `${txt || ''}`.trim();
+	return raw.length >= 2 ? raw.slice(0, 2) : raw;
+}
+
+function toSimpleFourColumns(nongli){
+	if(!nongli){
+		return null;
+	}
+	return {
+		year: {
+			ganzi: normalizeGanZi(nongli.yearGanZi || nongli.yearJieqi || nongli.year),
+			naying: '',
+		},
+		month: {
+			ganzi: normalizeGanZi(nongli.monthGanZi),
+			naying: '',
+		},
+		day: {
+			ganzi: normalizeGanZi(nongli.dayGanZi),
+			naying: '',
+		},
+		time: {
+			ganzi: normalizeGanZi(nongli.time || nongli.timeGanZi),
+			naying: '',
+		},
+	};
+}
+
+function getJieqiFourColumns(item){
+	if(!item){
+		return null;
+	}
+	if(item.bazi && item.bazi.fourColumns){
+		return item.bazi.fourColumns;
+	}
+	if(item.fourColumns){
+		return item.fourColumns;
+	}
+	if(item.bazi){
+		const fromBazi = toSimpleFourColumns(item.bazi);
+		if(fromBazi){
+			return fromBazi;
+		}
+	}
+	if(item.nongli){
+		return toSimpleFourColumns(item.nongli);
+	}
+	return null;
+}
+
+function normalizeFourColumnPart(part){
+	const src = part || {};
+	return {
+		ganzi: src.ganzi ? `${src.ganzi}` : '',
+		naying: src.naying ? `${src.naying}` : '',
+	};
+}
+
+function compactFourColumns(fourCols){
+	if(!fourCols){
+		return null;
+	}
+	return {
+		year: normalizeFourColumnPart(fourCols.year),
+		month: normalizeFourColumnPart(fourCols.month),
+		day: normalizeFourColumnPart(fourCols.day),
+		time: normalizeFourColumnPart(fourCols.time),
+	};
+}
+
+function compactJieqiSeedResult(result){
+	if(!result || !Array.isArray(result.jieqi24)){
+		return result;
+	}
+	const jieqi24 = result.jieqi24.map((item)=>{
+		const fourCols = compactFourColumns(getJieqiFourColumns(item));
+		return {
+			ord: item && item.ord !== undefined ? item.ord : null,
+			jieqi: item && item.jieqi ? `${item.jieqi}` : '',
+			jie: item && item.jie !== undefined ? item.jie : null,
+			time: item && item.time ? `${item.time}` : '',
+			ad: item && item.ad !== undefined ? item.ad : null,
+			bazi: fourCols ? { fourColumns: fourCols } : null,
+		};
+	});
+	return {
+		...result,
+		jieqi24,
+		charts: {},
+	};
+}
+
+function mergeJieqiRows(baseRows, patchRows){
+	const base = Array.isArray(baseRows) ? baseRows : [];
+	const patch = Array.isArray(patchRows) ? patchRows : [];
+	if(!base.length){
+		return patch;
+	}
+	if(!patch.length){
+		return base;
+	}
+	const patchMap = {};
+	patch.forEach((row)=>{
+		const key = row && row.jieqi ? `${row.jieqi}` : '';
+		if(!key){
+			return;
+		}
+		patchMap[key] = row;
+	});
+	return base.map((row)=>{
+		const key = row && row.jieqi ? `${row.jieqi}` : '';
+		const next = key ? patchMap[key] : null;
+		if(!next){
+			return row;
+		}
+		return {
+			...row,
+			ord: next.ord !== undefined ? next.ord : row.ord,
+			jie: next.jie !== undefined ? next.jie : row.jie,
+			time: next.time || row.time,
+			ad: next.ad !== undefined ? next.ad : row.ad,
+			bazi: next.bazi || row.bazi || null,
+		};
+	});
+}
+
+function cacheJieqiSeedRows(params, rows){
+	if(!params || !Array.isArray(rows) || !rows.length){
+		return;
+	}
+	const seed = {};
+	rows.forEach((entry)=>{
+		const term = entry && entry.jieqi ? `${entry.jieqi}` : '';
+		const time = entry && entry.time ? `${entry.time}` : '';
+		const fourCols = getJieqiFourColumns(entry);
+		if(term && time){
+			seed[term] = {
+				term,
+				time,
+				dateKey: time.split(' ')[0].replace(/-/g, ''),
+				dayGanzhi: fourCols && fourCols.day ? `${fourCols.day.ganzi || ''}` : '',
+			};
+		}
+	});
+	if(Object.keys(seed).length){
+		setJieqiSeedLocalCache(params, seed);
+	}
+}
+
+function findJieqiRow(rows, title){
+	if(!Array.isArray(rows) || !title){
+		return null;
+	}
+	for(let i = 0; i < rows.length; i += 1){
+		const row = rows[i];
+		if(row && row.jieqi === title){
+			return row;
+		}
+	}
+	return null;
+}
+
+function buildChartRequestParams(params, birth){
+	const dt = splitBirthToDateTime(birth);
+	return {
+		cid: null,
+		ad: params.ad,
+		date: dt.date.replace(/-/g, '/'),
+		time: dt.time,
+		zone: params.zone,
+		lat: params.lat,
+		lon: params.lon,
+		gpsLat: params.gpsLat,
+		gpsLon: params.gpsLon,
+		hsys: params.hsys,
+		southchart: false,
+		zodiacal: params.zodiacal,
+		siderealAyanamsa: params.siderealAyanamsa,
+		tradition: 0,
+		doubingSu28: params.doubingSu28,
+		strongRecption: 0,
+		simpleAsp: 0,
+		virtualPointReceiveAsp: 0,
+		predictive: 0,
+		pdaspects: [0, 60, 90, 120, 180],
+		name: null,
+		pos: null,
+		group: null,
+		// [Q-217/T-172] 自定义恒星黄道 'user' 档随行历元参数(params 有值优先,缺读当前槽;与主盘 fieldsToParams 同口径),
+		// 此前不带 → 后端回落默认岁差而标签仍写自定义。
+		...((`${params.siderealAyanamsa}` === 'user') ? userAyanParamsFrom((k)=>params[k]) : {}),
+		// 古典占星参数条件透传(默认不下发=请求体零回归,与 fieldsToParams 同条件)
+		...((params.termsVariant) ? { termsVariant: params.termsVariant } : {}),
+		...((params.geminiBoundEmended) ? { geminiBoundEmended: 1 } : {}),
+		// 2026-07 二批九键:共享 helper(平面版)条件透传。
+		...classicalBackendOverridesFromPlain(params),
+		...((params.triplicity && params.triplicity !== 'Dorothean') ? { triplicity: params.triplicity } : {}),
+		...((params.lotReversal === 0 || params.lotReversal === '0') ? { lotReversal: 0 } : {}),
+		...((params.westNodeType === 'true') ? { westNodeType: 'true' } : {}),
+		...((params.sectBuffer === 'ptolemy5') ? { sectBuffer: 'ptolemy5' } : {}),
+		...((params.leoBoundFirst === 1 || params.leoBoundFirst === '1') ? { leoBoundFirst: 1 } : {}),
+		// [Q-424/T-389] 日界 / 晚子时两键随四分至盘透传(Java 缺省 1/1;仅非缺省才发=缺省用户请求体零回归):
+		// 此前不发 → 宿盘中心「农历 / 四柱」恒按 23 点换日、晚子时次日干,不随全局设置。
+		...((params.after23NewDay !== undefined && params.after23NewDay !== null && Number(params.after23NewDay) !== 1) ? { after23NewDay: Number(params.after23NewDay) } : {}),
+		...((params.lateZiHourUseNextDay !== undefined && params.lateZiHourUseNextDay !== null && Number(params.lateZiHourUseNextDay) !== 1) ? { lateZiHourUseNextDay: Number(params.lateZiHourUseNextDay) } : {}),
+	};
+}
+
+async function loadJieqiChart(params, term, birth){
+	const key = getChartCacheKey(params, term, birth);
+	const cached = jieqiChartMem[key];
+	if(cached && cached.chart){
+		return cached.chart;
+	}
+	const dt = splitBirthToDateTime(birth);
+	const reqParams = buildChartRequestParams(params, birth);
+	// WP-C 极速化:silent=不触发全局满屏 Spin 压暗(角标由调用方 requestJieQiCharts 统一管理)
+	const data = await request(`${Constants.ServerRoot}/chart`, {
+		body: JSON.stringify(reqParams),
+		silent: silentTechniquePanelsEnabled(),
+	});
+	const chartObj = data && data[Constants.ResultKey] ? data[Constants.ResultKey] : null;
+	if(!chartObj){
+		return null;
+	}
+	if(!chartObj.params){
+		chartObj.params = {};
+	}
+	chartObj.params = {
+		...chartObj.params,
+		...reqParams,
+		birth: `${dt.date} ${dt.time}`,
+		year: params.year,
+	};
+	jieqiChartMem[key] = {
+		...(jieqiChartMem[key] || {}),
+		chart: chartObj,
+	};
+	return chartObj;
+}
+
+function normalizeJieqiCompareValue(value){
+	if(value === undefined || value === null || value === ''){
+		return null;
+	}
+	return `${value}`;
+}
+
+// [挂载自检 J-1] 合并新盘时按种子参数清理其它节气的陈旧盘(isJieQiChartCompatible 只比种子级键、不比日期,可跨节气判)。
+export function mergeJieQiCharts(prevCharts, title, chartObj, reqParams){
+	const prev = prevCharts && typeof prevCharts === 'object' ? prevCharts : {};
+	const out = {};
+	Object.keys(prev).forEach((t)=>{
+		if(t === title){ return; }
+		if(isJieQiChartCompatible(prev[t], reqParams)){ out[t] = prev[t]; }
+	});
+	out[title] = chartObj;
+	return out;
+}
+
+export function isJieQiChartCompatible(chartObj, params){
+	const chartParams = chartObj && chartObj.params ? chartObj.params : {};
+	const reqParams = params || {};
+	return [
+		'year',
+		'ad',
+		'zone',
+		'lat',
+		'lon',
+		'gpsLat',
+		'gpsLon',
+		'hsys',
+		'zodiacal',
+		// 🔴 曾漏 siderealAyanamsa:换岁差时 zodiacal 恒 1、其余键全等 → 判「兼容」直接返旧盘,
+		// 请求根本不发(同文件 getChartCacheKey 已含该键,两套键漂移)。古典键同理。
+		'siderealAyanamsa',
+		'doubingSu28',
+		'termsVariant',
+		'triplicity',
+		'lotReversal',
+		'westNodeType',
+		'sectBuffer',
+		'leoBoundFirst',
+		'after23NewDay',            // [Q-424/T-389] 日界 / 晚子时(reqParams 已并入 chartObj.params,可比;缺省两侧皆缺=兼容)
+		'lateZiHourUseNextDay',
+	].every((key)=>normalizeJieqiCompareValue(chartParams[key]) === normalizeJieqiCompareValue(reqParams[key]))
+		// [Q-217/T-176] 其余古典键(spec 全键,后端名)与 'user' 历元同判:任一改动即视为不兼容重取。
+		&& classicalCalibreSig(chartParams) === classicalCalibreSig(reqParams);
+}
+
+function isEncodedToken(text){
+	return /^[A-Za-z0-9${}]$/.test((text || '').trim());
+}
+
+function msg(id){
+	if(id === undefined || id === null){
+		return '';
+	}
+	if(AstroText.AstroTxtMsg[id]){
+		return AstroText.AstroTxtMsg[id];
+	}
+	if(AstroText.AstroMsg[id]){
+		const val = AstroText.AstroMsg[id];
+		if(isEncodedToken(val)){
+			return `${id}`;
+		}
+		return `${val}`;
+	}
+	return `${id}`;
+}
+
+function splitDegree(degree){
+	let d = Number(degree);
+	if(Number.isNaN(d)){
+		return [0, 0];
+	}
+	if(d < 0){
+		d += 360;
+	}
+	const deg = Math.floor(d % 30);
+	const min = Math.floor(((d % 30) - deg) * 60);
+	return [deg, min];
+}
+
+function signFromLon(lon){
+	if(lon === undefined || lon === null || Number.isNaN(Number(lon))){
+		return null;
+	}
+	let val = Number(lon) % 360;
+	if(val < 0){
+		val += 360;
+	}
+	const idx = Math.floor(val / 30) % 12;
+	return AstroConst.LIST_SIGNS[idx];
+}
+
+function resolveHouseStartMode(fields){
+	if(fields && fields.houseStartMode && fields.houseStartMode.value !== undefined && fields.houseStartMode.value !== null){
+		return parseInt(fields.houseStartMode.value, 10) === SZConst.SZHouseStart_ASC
+			? SZConst.SZHouseStart_ASC : SZConst.SZHouseStart_Bazi;
+	}
+	return SZConst.SZHouseStart_Bazi;
+}
+
+function computeAscSignIndex(rootObj, chart, fields){
+	const objects = chart && chart.objects ? chart.objects : [];
+	const asc = objects.find((obj)=>obj.id === AstroConst.ASC);
+	const sun = objects.find((obj)=>obj.id === AstroConst.SUN);
+	if(!asc){
+		return -1;
+	}
+	const ascIdx = Math.floor(Number(asc.ra) / 30);
+	if(resolveHouseStartMode(fields) === SZConst.SZHouseStart_ASC){
+		return ascIdx;
+	}
+	const bazi = (chart && chart.nongli && chart.nongli.bazi)
+		|| (rootObj && rootObj.nongli && rootObj.nongli.bazi);
+	if(!bazi || !sun){
+		return ascIdx;
+	}
+	const timezi = bazi.time && bazi.time.branch ? bazi.time.branch.cell : null;
+	const timesig = timezi ? SZConst.ZiSign[timezi] : null;
+	const tmsigidx = timesig ? AstroConst.LIST_SIGNS.indexOf(timesig) : -1;
+	if(tmsigidx < 0){
+		return ascIdx;
+	}
+	const sunidx = Math.floor(Number(sun.ra) / 30);
+	return (sunidx - tmsigidx - 5 + 24) % 12;
+}
+
+function houseFullLabel(house, idx, ascSignIndex){
+	let houseName = msg(house && house.id ? house.id : null) || `第${idx + 1}宫`;
+	const sign = signFromLon(house ? house.lon : null);
+	if(!sign){
+		return houseName;
+	}
+	const signIdx = AstroConst.LIST_SIGNS.indexOf(sign);
+	if(signIdx >= 0 && ascSignIndex >= 0){
+		const hnum = (signIdx - ascSignIndex + 12) % 12 + 1;
+		houseName = `第${hnum}宫`;
+	}
+	const zi = SZConst.SignZi[sign] || '';
+	const area = (SZConst.SZSigns[signIdx] && SZConst.SZSigns[signIdx].length >= 2)
+		? `${SZConst.SZSigns[signIdx][0]}${SZConst.SZSigns[signIdx][1]}`
+		: '';
+	const signName = AstroText.AstroMsgCN[sign] || msg(sign);
+	return `${zi}—${area}—${signName}座—${houseName}`;
+}
+
+function buildJieQiSuSection(chartObj, fields, planetDisplay){
+	const chart = chartObj && chartObj.chart ? chartObj.chart : {};
+	const houses = chart.houses || [];
+	const objects = chart.objects || [];
+	const lines = [];
+	const ascSignIndex = computeAscSignIndex(chartObj, chart, fields);
+	let visibleSet = null;
+	if(planetDisplay && planetDisplay.length){
+		visibleSet = new Set(planetDisplay);
+	}
+	houses.forEach((house, idx)=>{
+		lines.push(`宫位：${houseFullLabel(house, idx, ascSignIndex)}`);
+		const inHouse = objects.filter((obj)=>{
+			if(obj.house !== house.id){
+				return false;
+			}
+			if(visibleSet){
+				return visibleSet.has(obj.id);
+			}
+			return AstroConst.isTraditionPlanet(obj.id);
+		})
+			.sort((a, b)=>{
+				if(a.ra > 300 && b.ra < 30){
+					return -1;
+				}
+				// 环形序须对称全序:跨 0°RA 两向都判,单侧判 = 非对称比较器,sort 行为未定义。
+				if(b.ra > 300 && a.ra < 30){
+					return 1;
+				}
+				return a.ra - b.ra;
+			});
+		if(inHouse.length === 0){
+			lines.push('二十八宿：无');
+			lines.push('星曜：无');
+			lines.push('');
+			return;
+		}
+		const suMap = new Map();
+		inHouse.forEach((obj)=>{
+			const su = obj.su28 || '未知宿';
+			if(!suMap.has(su)){
+				suMap.set(su, []);
+			}
+			suMap.get(su).push(obj);
+		});
+		const suKeys = Array.from(suMap.keys()).sort((a, b)=>{
+			const ia = Su28Helper.Su28.indexOf(a);
+			const ib = Su28Helper.Su28.indexOf(b);
+			if(ia < 0 && ib < 0){
+				return `${a}`.localeCompare(`${b}`);
+			}
+			if(ia < 0){
+				return 1;
+			}
+			if(ib < 0){
+				return -1;
+			}
+			return ia - ib;
+		});
+		suKeys.forEach((su)=>{
+			const list = suMap.get(su) || [];
+			lines.push(`二十八宿：${su}`);
+			list.forEach((obj)=>{
+				let radeg = Number(obj.ra);
+				const suRef = (chart.fixedStarSu28 || []).find((it)=>it.name === su);
+				if(!Number.isNaN(radeg) && suRef && suRef.ra !== undefined && suRef.ra !== null){
+					radeg = Number(obj.ra) - Number(suRef.ra);
+					if(radeg < 0){
+						radeg += 360;
+					}
+				}else{
+					radeg = Number(obj.signlon);
+				}
+				const sd = splitDegree(radeg);
+				lines.push(`星曜：${appendPlanetHouseInfo(msg(obj.id), obj, AI_EXPORT_PLANET_INFO)} ${sd[0]}˚${su}${sd[1]}分`);
+			});
+		});
+		lines.push('');
+	});
+	return lines.join('\n').trim();
+}
+
+// ⚠️ withHeaders=true 分支为死分支(仓内唯一调用传 false;同类自检 v42 定性):其段头
+// (起盘信息/宫位宫头/行星与点)未登 jieqi preset——若启用必须先登记(全树段头哨兵会咬)。
+function buildJieQiAstroLightSection(chartObj, fields, withHeaders=true){
+	const chart = chartObj && chartObj.chart ? chartObj.chart : {};
+	const params = chartObj && chartObj.params ? chartObj.params : {};
+	const houses = chart.houses || [];
+	const objects = chart.objects || [];
+	const lines = [];
+
+	if(withHeaders){
+		lines.push('[起盘信息]');
+	}
+	const lon = fields && fields.lon ? fields.lon.value : params.lon;
+	const lat = fields && fields.lat ? fields.lat.value : params.lat;
+	if(lon || lat){
+		lines.push(`经纬度：${lon || ''} ${lat || ''}`);
+	}
+	if(params.birth){
+		lines.push(`时间：${params.birth}`);
+	}
+	if(params.zone !== undefined && params.zone !== null){
+		lines.push(`时区：${params.zone}`);
+	}
+	if(chart.zodiacal){
+		lines.push(`黄道：${msg(chart.zodiacal)}`);
+	}
+	if(chart.hsys){
+		lines.push(`宫制：${msg(chart.hsys)}`);
+	}
+
+	if(withHeaders){
+		lines.push('');
+		lines.push('[宫位宫头]');
+	}else{
+		lines.push('');
+		lines.push('宫位宫头：');
+	}
+	houses.forEach((house, idx)=>{
+		if(house && house.lon !== undefined && house.lon !== null){
+			const deg = splitDegree(house.lon);
+			const sign = Math.floor(((house.lon % 360) + 360) % 360 / 30);
+			const signs = ['白羊', '金牛', '双子', '巨蟹', '狮子', '处女', '天秤', '天蝎', '射手', '摩羯', '水瓶', '双鱼'];
+			lines.push(`${msg(house.id) || `第${idx + 1}宫`}：${Math.abs(deg[0] % 30)}˚${signs[sign]}${Math.abs(deg[1])}分`);
+		}
+	});
+
+	lines.push('');
+	if(withHeaders){
+		lines.push('[行星与点]');
+	}else{
+		lines.push('行星与点：');
+	}
+	objects.forEach((obj)=>{
+		const sd = splitDegree(obj.signlon);
+		lines.push(`${appendPlanetHouseInfoById(msg(obj.id), chartObj, obj.id, AI_EXPORT_PLANET_INFO)}：${sd[0]}˚${msg(obj.sign)}${sd[1]}分；宫位=${msg(obj.house)}`);
+	});
+	return lines.join('\n').trim();
+}
+
+export function buildJieQiSnapshotText(result, baseFields, jieqis, planetDisplay){   // [Q-446] 具名导出供单测
+	const lines = [];
+	const charts = result && result.charts ? result.charts : {};
+	lines.push('[节气盘参数]');
+	if(baseFields && baseFields.date && baseFields.date.value){
+		lines.push(`年份：${baseFields.date.value.format('YYYY')}`);
+	}
+	if(baseFields && baseFields.zone){
+		lines.push(`时区：${baseFields.zone.value}`);
+	}
+	if(baseFields && baseFields.lon && baseFields.lat){
+		lines.push(`经纬度：${baseFields.lon.value} ${baseFields.lat.value}`);
+	}
+	lines.push('说明：以下包含二分二至（春分、夏至、秋分、冬至）的星盘与宿盘专用导出。');
+	// [Q-224/T-180] 整年快照补 [二十四节气] 段(交节时刻 + 四柱,与页面「二十四节气」页签同源):此前停在默认页签导出只有参数头。
+	const rows24 = result && Array.isArray(result.jieqi24) ? result.jieqi24 : [];
+	if(rows24.length){
+		lines.push('');
+		lines.push('[二十四节气]');
+		lines.push('| 节气 | 交节时刻 | 年柱 | 月柱 | 日柱 | 时柱 |');
+		lines.push('| --- | --- | --- | --- | --- | --- |');
+		rows24.forEach((item)=>{
+			const fc = getJieqiFourColumns(item) || {};
+			const gz = (c)=>(c && c.ganzi ? c.ganzi : '');
+			lines.push(`| ${item && item.jieqi ? item.jieqi : ''} | ${item && item.time ? item.time : ''} | ${gz(fc.year)} | ${gz(fc.month)} | ${gz(fc.day)} | ${gz(fc.time)} |`);
+		});
+	}
+	// [Q-224/T-180] 四盘未拉取(未点开对应页签)时明示未纳入,而不是静默只剩参数头。
+	const missing = (jieqis || []).filter((t)=>!charts[t]);
+	if(missing.length){
+		lines.push('');
+		lines.push(`说明：${missing.join('、')}的星盘 / 宿盘尚未拉取（打开对应页签后再导出即纳入）。`);
+	}
+
+	(jieqis || []).forEach((title)=>{
+		const one = charts[title];
+		if(!one){
+			return;
+		}
+		let flds = baseFields;
+		if(one.params){
+			flds = paramsToFields(one.params, baseFields);
+		}
+		lines.push('');
+		lines.push(`[${title}星盘]`);
+		// [Q-446/T-409] 整年快照的星盘段此前用轻量版(起盘信息/宫头/行星三块),而「当前页签」快照同名段走
+		// buildAstroSnapshotContent 全口径(相位/希腊点/12 分度/主宰星链/古典…)→ 同名段两种口径。统一为全口径。
+		lines.push(buildAstroSnapshotContent(one, flds, { headerless: true }) || buildJieQiAstroLightSection(one, flds, false) || '无数据');
+		lines.push('');
+		lines.push(`[${title}宿盘]`);
+		lines.push(buildJieQiSuSection(one, flds, planetDisplay) || '无数据');
+		// [Q-446/T-409] 整年快照此前恒无 3D 段(页有 3D 盘页签,preset 也登记了 3D 段却从不产出);
+		// 3D 盘与该节气星盘同一盘数据(仅三维视图),故以指引段出现,不整盘重复。
+		lines.push('');
+		lines.push(`[${title}3D盘]`);
+		lines.push(`3D 盘为「${title}星盘」同一节气盘的三维视图(星位/宫位/相位同上 [${title}星盘] 段,无独立数据)。`);
+	});
+	return lines.join('\n').trim();
+}
+
+function parseJieQiTab(currentTab, jieqis){
+	if(!currentTab){
+		return null;
+	}
+	if((jieqis || []).indexOf(currentTab) >= 0){
+		return { title: currentTab, type: 'astro' };
+	}
+	for(let i=0; i<(jieqis || []).length; i++){
+		const title = jieqis[i];
+		if(currentTab === `宿盘${title}`){
+			return { title, type: 'suzhan' };
+		}
+		if(currentTab === `3D盘${title}`){
+			return { title, type: 'astro3d' };
+		}
+	}
+	return null;
+}
+
+export function buildJieQiCurrentSnapshotText(currentTab, result, baseFields, jieqis, planetDisplay){   // [Q-446] 具名导出供单测
+	const info = parseJieQiTab(currentTab, jieqis);
+	if(!info){
+		return '';
+	}
+	const charts = result && result.charts ? result.charts : {};
+	const one = charts[info.title];
+	if(!one){
+		return '';
+	}
+	let flds = baseFields;
+	if(one.params){
+		flds = paramsToFields(one.params, baseFields);
+	}
+	const lines = [];
+	if(info.type === 'suzhan'){
+		lines.push(`[${info.title}宿盘]`);
+		lines.push(buildJieQiSuSection(one, flds, planetDisplay) || '无数据');
+	}else{
+		const panelName = info.type === 'astro3d' ? `${info.title}3D盘` : `${info.title}星盘`;
+		lines.push(`[${panelName}]`);
+		lines.push(buildAstroSnapshotContent(one, flds, { headerless: true }) || '无数据');
+	}
+	return lines.join('\n').trim();
+}
+
+function tabNeedsJieqiCharts(currentTab, jieqis){
+	return parseJieQiTab(currentTab, jieqis) !== null;
+}
+
+
+export class JieQiChartsMain extends Component{
+	// v3.6.0 收敛注(#78 双 sCU 防复发):上游同类内也带一份通用 wrapperPropsEqual 渲染守卫,
+	// 与本类内另一份我方细化守卫重复(JS 后者静默胜出)。按「单一 sCU」纪律移除上游份,
+	// 我方守卫语义为其超集(state 引用变照常放行 + 页面专属无关键剔除)。
+	constructor(props) {
+		super(props);
+
+		let now = new DateTime();
+		this.state = {
+			divid: 'div_' + randomStr(8),
+			currentTab: '二十四节气',
+			result: {},
+			time: now,
+			zone: now.zone,
+			lat: Constants.DefLat,
+			lon: Constants.DefLon,
+			ad: now.ad,
+			hsys: 0,
+			zodiacal: 0,
+			siderealAyanamsa: '',
+			doubingSu28: 0,
+			gpsLat: Constants.DefGpsLat,
+			gpsLon: Constants.DefGpsLon,
+			jieqis: ['春分', '夏至', '秋分', '冬至'],
+			fields: {},
+
+			hook:{
+				suzhan:{
+					fun: null
+				},
+				chart3d:{
+					fun: null
+				},	
+			},
+		}
+
+		this.unmounted = false;
+		this.snapshotTimer = null;
+		this.requestSeq = 0;
+		this.pendingSeedRequest = null;
+		this.lastSeedResultKey = '';
+		this.chartRequestSeq = 0;
+		this.pendingChartRequest = null;
+		this.lastChartResultKey = '';
+		this.baziRequestSeq = 0;
+		this.pendingBaziRequest = null;
+		this.lastBaziResultKey = '';
+
+		this.changeTab = this.changeTab.bind(this);
+		this.requestJieQi = this.requestJieQi.bind(this);
+		this.requestJieQiCharts = this.requestJieQiCharts.bind(this);
+		this.requestJieQiBazi = this.requestJieQiBazi.bind(this);
+		this.currentTabNeedsCharts = this.currentTabNeedsCharts.bind(this);
+		this.ensureChartsForTab = this.ensureChartsForTab.bind(this);
+		this.genParams = this.genParams.bind(this);
+		this.genSeedParams = this.genSeedParams.bind(this);
+		this.genChartParams = this.genChartParams.bind(this);
+
+		this.onLatChanged = this.onLatChanged.bind(this);
+		this.onLonChanged = this.onLonChanged.bind(this);
+		this.onTimeChanged = this.onTimeChanged.bind(this);
+		this.onZoneChanged = this.onZoneChanged.bind(this);
+		this.onAdChanged = this.onAdChanged.bind(this);
+		this.changeGeo = this.changeGeo.bind(this);
+		this.changeHsys = this.changeHsys.bind(this);
+		this.changeZodiacal = this.changeZodiacal.bind(this);
+		this.onSuZhanFieldsChange = this.onSuZhanFieldsChange.bind(this);
+
+		this.gen24JieqiDom = this.gen24JieqiDom.bind(this);
+		this.genTabsDom = this.genTabsDom.bind(this);
+		this.renderBottomQuickDock = this.renderBottomQuickDock.bind(this);
+		this.saveCurrentJieQiSnapshot = this.saveCurrentJieQiSnapshot.bind(this);
+		this.scheduleJieqiSnapshotSave = this.scheduleJieqiSnapshotSave.bind(this);
+		this.handleSnapshotRefreshRequest = this.handleSnapshotRefreshRequest.bind(this);
+
+		let params = this.genSeedParams();
+		this.state.fields = paramsToFields(params);
+
+		if(this.props.hook){
+			this.props.hook.fun = (fields)=>{
+				if(this.unmounted){
+					return;
+				}
+				if(fields){
+					let st = fieldsToState(fields);
+					// [Q-221/T-179·FT-11] 全局 hook 只在「出生时空真变」时覆盖本页年份/时区/地点;仅改设置(宫制/黄道/古典口径…)或
+					// 内嵌左栏点「重算星盘」时,保留用户用「上一年/下一年」/工具条改过的年份与地点(此前一律整组重置回主盘)。
+					if(this._lastHookBirthSig !== undefined && this._lastHookBirthSig === hookBirthSig(fields)){
+						['time', 'ad', 'zone', 'lat', 'lon', 'gpsLat', 'gpsLon'].forEach((k)=>{ delete st[k]; });
+					}
+					this._lastHookBirthSig = hookBirthSig(fields);
+					this.setState(st, ()=>{
+						if(this.unmounted){
+							return;
+						}
+						this.requestJieQi();
+					});
+				}else{
+					this.requestJieQi();
+				}
+			};
+		}
+
+	}
+
+	genParams(includeJieqis=true){
+		const params = {
+			year: this.state.time.format('YYYY'),
+			ad: this.state.ad,
+			zone: this.state.zone,
+			lon: this.state.lon,
+			lat: this.state.lat,
+			hsys: this.state.hsys,
+			zodiacal: this.state.zodiacal,
+			siderealAyanamsa: this.state.siderealAyanamsa,
+			gpsLat: this.state.gpsLat,
+			gpsLon: this.state.gpsLon,
+			doubingSu28: this.state.doubingSu28,
+			after23NewDay: defaultAfter23NewDay(),
+			lateZiHourUseNextDay: defaultLateZiHourUseNextDay(),
+		};
+		// 🔴 古典口径 16 键随分至盘透传:fieldsToState 早已把它们提进 state,但 genParams
+		// 曾不输出 → 下游条件透传与 classicalBackendOverridesFromPlain 恒空、缓存键六项恒
+		// undefined,「六构参点自动同步」的承诺在分至盘这一路断链(用户改界系/三分/福点反转…
+		// 二分二至四盘静默走后端默认,与主盘系统性分叉且改设置也不重取)。
+		[
+			'termsVariant', 'geminiBoundEmended', 'leoBoundFirst', 'triplicity', 'lotReversal',
+			'westNodeType', 'sectBuffer',
+		].forEach((k)=>{
+			const v = this.state[k];
+			if(v !== undefined && v !== null && v !== ''){ params[k] = v; }
+		});
+		// 古典九键覆盖走单源 helper:自带 fixedStarOrb→starOrb / fixedStarOrbMode→starOrbMode 的
+		// 后端名映射与「仅非默认才下发」纪律 —— 🔴 曾按前端名直发,恒星容许度两键后端 data.get
+		// 恒未命中(16 键断链只真通了 14 键),且默认值也进请求体与主盘构参纪律分叉。
+		Object.assign(params, classicalBackendOverridesFromPlain(this.state));
+		// [Q-217/T-172] 'user' 恒星黄道:历元两键随 params(fields 有值优先,缺读当前槽)。
+		if(`${this.state.siderealAyanamsa}` === 'user'){
+			Object.assign(params, userAyanParamsFrom((k)=>this.state[k]));
+		}
+		if(includeJieqis){
+			params.jieqis = this.state.jieqis;
+		}
+		return params;
+	}
+
+	genSeedParams(){
+		return this.genParams(false);
+	}
+
+	genChartParams(seedParams){
+		const base = seedParams || this.genSeedParams();
+		return {
+			...base,
+			jieqis: this.state.jieqis,
+		};
+	}
+
+	currentTabNeedsCharts(tab){
+		return tabNeedsJieqiCharts(tab || this.state.currentTab, this.state.jieqis);
+	}
+
+	ensureChartsForTab(tab){
+		if(!this.currentTabNeedsCharts(tab)){
+			return null;
+		}
+		const titleInfo = parseJieQiTab(tab || this.state.currentTab, this.state.jieqis);
+		const title = titleInfo && titleInfo.title ? titleInfo.title : null;
+		if(title && this.state.result && this.state.result.charts && this.state.result.charts[title]){
+			return Promise.resolve(this.state.result.charts[title]);
+		}
+		const seedParams = this.genSeedParams();
+		return this.requestJieQiCharts(seedParams, this.requestSeq);
+	}
+
+	getSeedRequestKey(params){
+		const p = params || this.genSeedParams();
+		return [
+			getSeedCacheKey(p),
+			p && p.hsys,
+			p && p.zodiacal,
+			p && p.doubingSu28,
+			p && p.seedOnly ? 1 : 0,
+		].join('|');
+	}
+
+	getChartRequestKey(params, tab){
+		const p = params || this.genSeedParams();
+		const info = parseJieQiTab(tab || this.state.currentTab, this.state.jieqis);
+		const title = info && info.title ? info.title : '';
+		// 与 getChartCacheKey 同维(曾少 siderealAyanamsa 与古典六键 → 换岁差/界系时
+		// 去重键不变,pendingChartRequest 会把新一轮请求当重复丢掉)。
+		return [
+			getSeedCacheKey(p),
+			p && p.hsys,
+			p && p.zodiacal,
+			p && p.siderealAyanamsa,
+			p && p.doubingSu28,
+			p && p.termsVariant,
+			p && p.triplicity,
+			p && p.lotReversal,
+			p && p.westNodeType,
+			p && p.sectBuffer,
+			p && p.leoBoundFirst,
+			p && p.after23NewDay,            // [Q-424/T-389]
+			p && p.lateZiHourUseNextDay,
+			title,
+		].join('|');
+	}
+
+	async requestJieQi(){
+		const seedParams = this.genSeedParams();
+		const needsCharts = this.currentTabNeedsCharts();
+		const flds = paramsToFields(seedParams, this.state.fields);
+		const seq = ++this.requestSeq;
+		this.setState({
+			fields: flds,
+		});
+		const chartsPromise = needsCharts
+			? this.requestJieQiCharts(seedParams, seq, this.state.currentTab)
+			: null;
+		const baziPromise = this.requestJieQiBazi(seedParams, seq);
+		// horosa_panel_ready_v1:本族的「画完」不是单点 —— 中栏 24 节气总览来自 bazi 请求,
+		// 右栏盘来自 charts 请求,两者各自 setState。故取**两者都落定**之后为就绪点
+		// (命中缓存的一路会立即 resolve,不影响另一路)。markPanelReady 内部双 rAF 逼近本帧已绘,
+		// 且同一次交互只记第一条;markInteractionStart 未打过时(挂载首刷)自动空转。
+		Promise.all([chartsPromise, baziPromise]).then(()=>{
+			if(this.unmounted){ return; }
+			markPanelReady('jieqichart');
+		}).catch(()=>{ /* 失败不记样本 */ });
+		return baziPromise;
+	}
+
+	async requestJieQiCharts(seedParams, seedSeq, tab){
+		const currentTab = tab || this.state.currentTab;
+		const info = parseJieQiTab(currentTab, this.state.jieqis);
+		if(!info || !info.title){
+			return null;
+		}
+		const title = info.title;
+		const reqParams = seedParams || this.genSeedParams();
+		const reqKey = this.getChartRequestKey(reqParams, currentTab);
+		if(this.pendingChartRequest && this.pendingChartRequest.key === reqKey){
+			return this.pendingChartRequest.promise;
+		}
+		const cachedChart = this.state.result
+			&& this.state.result.charts
+			? this.state.result.charts[title]
+			: null;
+		if(this.state.result
+			&& this.state.result.charts
+			&& cachedChart
+			&& isJieQiChartCompatible(cachedChart, reqParams)){
+			this.lastChartResultKey = reqKey;
+			return cachedChart;
+		}
+		const seq = ++this.chartRequestSeq;
+		const reqPromise = (async()=>{
+			let rows = this.state.result && Array.isArray(this.state.result.jieqi24)
+				? this.state.result.jieqi24 : [];
+			let row = findJieqiRow(rows, title);
+			if(!row || !row.time){
+				rows = await this.requestJieQiBazi(reqParams, seedSeq);
+				row = findJieqiRow(rows, title);
+			}
+			if(!row || !row.time || this.unmounted){
+				return null;
+			}
+			if(seedSeq !== undefined && seedSeq !== this.requestSeq){
+				return null;
+			}
+			if(seq !== this.chartRequestSeq){
+				return null;
+			}
+			// keep-stale:旧盘留存,后台重取期间盘网格挂统一角标;抛错/空回包(request 失败可能
+			// resolve undefined)吞掉只收角标,绝不清旧盘
+			this.setState({ updating: true });
+			let chartObj = null;
+			try{
+				chartObj = await loadJieqiChart(reqParams, title, row.time);
+			}catch(e){
+				chartObj = null;
+			}
+			if(this.unmounted){
+				return chartObj;
+			}
+			// 本轮已被更新一轮盘请求顶掉:角标交由新请求收尾,这里不动(避免旧请求回来掐灭新一轮角标)
+			if(seq !== this.chartRequestSeq){
+				return chartObj;
+			}
+			if(!chartObj || (seedSeq !== undefined && seedSeq !== this.requestSeq)){
+				this.setState({ updating: false });
+				return chartObj;
+			}
+			this.lastChartResultKey = reqKey;
+			this.setState((prev)=>{
+				const prevResult = prev.result || {};
+				return {
+					updating: false,
+					result: {
+						...prevResult,
+						// [挂载自检 J-1·P0] 种子参数(年份/地点/宫制/黄道/岁差/宿度制/古典键)变了,其余节气的旧盘一并丢弃——
+						// 此前 charts 只增不清、兼容判定只在访问该盘页签时做 → 整年快照 [节气盘参数] 新值、各盘旧盘混参。
+						charts: mergeJieQiCharts(prevResult.charts, title, chartObj, reqParams),
+					},
+				};
+				}, ()=>{
+					this.saveCurrentJieQiSnapshot(this.state.currentTab, this.state.result, this.state.fields);
+					this.scheduleJieqiSnapshotSave(this.state.result, this.state.fields, reqParams);
+				});
+			return chartObj;
+		})().finally(()=>{
+			if(this.pendingChartRequest && this.pendingChartRequest.seq === seq){
+				this.pendingChartRequest = null;
+			}
+		});
+		this.pendingChartRequest = {
+			key: reqKey,
+			seq,
+			promise: reqPromise,
+		};
+		return reqPromise;
+	}
+
+	async requestJieQiBazi(seedParams, seedSeq){
+		const reqKey = this.getSeedRequestKey(seedParams);
+		if(this.pendingBaziRequest && this.pendingBaziRequest.key === reqKey){
+			return this.pendingBaziRequest.promise;
+		}
+		if(this.lastBaziResultKey === reqKey
+			&& this.state.result
+			&& Array.isArray(this.state.result.jieqi24)
+			&& this.state.result.jieqi24.some((item)=>item && item.bazi && item.bazi.fourColumns)){
+			return this.state.result.jieqi24;
+		}
+		const seq = ++this.baziRequestSeq;
+		const reqPromise = (async()=>{
+			const fullResult = await fetchPreciseJieqiYear(seedParams);
+			if(fullResult){
+				// PERF-R8 P3:当前年取到后静默预取 year±1(同参仅换年;幂等三层缓存;
+				// generation 门控防连点风暴)→ 年份步进=命中即时。失败静默。
+				prefetchJieqiYearNeighbors(seedParams);
+			}
+			if(!fullResult || this.unmounted){
+				return fullResult;
+			}
+			if(seedSeq !== undefined && seedSeq !== this.requestSeq){
+				return fullResult;
+			}
+			if(seq !== this.baziRequestSeq){
+				return fullResult;
+			}
+			const compact = compactJieqiSeedResult(fullResult);
+			const fullRows = compact && Array.isArray(compact.jieqi24) ? compact.jieqi24 : [];
+			if(!fullRows.length){
+				return fullRows;
+			}
+			cacheJieqiSeedRows(seedParams, fullRows);
+			this.lastBaziResultKey = reqKey;
+			this.setState((prev)=>{
+				const prevResult = prev.result || {};
+				const mergedJieqi24 = mergeJieqiRows(prevResult.jieqi24, fullRows);
+				return {
+					result: {
+						...prevResult,
+						jieqi24: mergedJieqi24,
+					},
+				};
+			}, ()=>{
+				this.saveCurrentJieQiSnapshot(this.state.currentTab, this.state.result, this.state.fields);
+				this.scheduleJieqiSnapshotSave(this.state.result, this.state.fields, seedParams);
+			});
+			return fullRows;
+		})().finally(()=>{
+			if(this.pendingBaziRequest && this.pendingBaziRequest.seq === seq){
+				this.pendingBaziRequest = null;
+			}
+		});
+		this.pendingBaziRequest = {
+			key: reqKey,
+			seq,
+			promise: reqPromise,
+		};
+		return reqPromise;
+	}
+
+	scheduleJieqiSnapshotSave(result, fields, params){
+		if(this.snapshotTimer){
+			if(typeof window !== 'undefined' && typeof window.cancelIdleCallback === 'function'){
+				window.cancelIdleCallback(this.snapshotTimer);
+			}else{
+				clearTimeout(this.snapshotTimer);
+			}
+			this.snapshotTimer = null;
+		}
+		const saveJob = ()=>{
+			if(this.unmounted){
+				return;
+			}
+			const p = params || {};
+			saveModuleAISnapshot('jieqi', buildJieQiSnapshotText(result, fields, this.state.jieqis, this.props.planetDisplay), {
+				year: p.year,
+				zone: p.zone,
+				lon: p.lon,
+				lat: p.lat,
+				hsys: p.hsys,
+				zodiacal: p.zodiacal, siderealAyanamsa: p.siderealAyanamsa,
+			});
+			saveModuleAISnapshot('jieqi_current', buildJieQiCurrentSnapshotText(this.state.currentTab, result, fields, this.state.jieqis, this.props.planetDisplay), {
+				year: p.year,
+				zone: p.zone,
+				lon: p.lon,
+				lat: p.lat,
+				hsys: p.hsys,
+				zodiacal: p.zodiacal, siderealAyanamsa: p.siderealAyanamsa,
+				currentTab: this.state.currentTab,
+			});
+		};
+		// 节气快照在空闲时保存，避免主线程卡顿。
+		if(typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'){
+			this.snapshotTimer = window.requestIdleCallback(saveJob, { timeout: 1200 });
+		}else{
+			this.snapshotTimer = setTimeout(saveJob, 220);
+		}
+	}
+
+	changeTab(key){
+		this.setState({
+			currentTab: key,
+		}, ()=>{
+			this.ensureChartsForTab(key);
+			this.saveCurrentJieQiSnapshot(key);
+			if(this.props.dispatch){
+				this.props.dispatch({
+					type: 'astro/save',
+					payload: {
+					currentSubTab: key,
+					},
+				});
+			}	
+		});
+	}
+
+	saveCurrentJieQiSnapshot(currentTab, result, flds){
+		const tab = currentTab || this.state.currentTab;
+		const rs = result || this.state.result;
+		const fields = flds || this.state.fields;
+		const txt = buildJieQiCurrentSnapshotText(tab, rs, fields, this.state.jieqis, this.props.planetDisplay);
+		if(!txt){
+			// [挂载自检 J-2·P0] 非盘页签(总览/参数)本就不产「当前盘」快照 → 必须真清槽:此前早退且 save 空文不覆盖,
+			// 上一次访问的单盘常驻,导出优先取 jieqi_current → 吐旧盘、上下文键也据此误判分键。
+			clearModuleAISnapshot('jieqi_current');
+			return;
+		}
+		saveModuleAISnapshot('jieqi_current', txt, {
+			currentTab: tab,
+		});
+	}
+
+	handleSnapshotRefreshRequest(evt){
+		const moduleName = evt && evt.detail ? evt.detail.module : '';
+		if(moduleName !== 'jieqi' && moduleName !== 'jieqi_current'){
+			return;
+		}
+		const result = this.state ? this.state.result : null;
+		const fields = this.state ? this.state.fields : null;
+		const jieqis = this.state ? this.state.jieqis : null;
+		const currentTab = this.state ? this.state.currentTab : null;
+		let text = '';
+		try{
+			if(moduleName === 'jieqi_current'){
+				text = `${buildJieQiCurrentSnapshotText(currentTab, result, fields, jieqis, this.props.planetDisplay) || ''}`.trim();
+			}else{
+				text = `${buildJieQiSnapshotText(result, fields, jieqis, this.props.planetDisplay) || ''}`.trim();
+			}
+		}catch(e){
+			text = '';
+		}
+		if(text){
+			saveModuleAISnapshot(moduleName, text);
+			if(evt && evt.detail && typeof evt.detail === 'object'){
+				evt.detail.snapshotText = text;
+			}
+		}
+	}
+
+	onAdChanged(value){
+		this.setState({
+			ad: value,
+		}, ()=>{
+			this.requestJieQi()
+		});
+	}
+
+	onTimeChanged(val){
+		// [Q-221/T-177·FT-09] 工具条 AD/BC 走 DateTimeSelector.changeAD → 只改 DateTime.ad;此前 state.ad 不跟着改 →
+		// year(带符号)与 ad 两路不同形(主盘为公元前时切回 AD,后端仍按 ad=-1 起四柱)。与宿盘内嵌时空面板(写 ad)同口径。
+		const next = { time: val.value };
+		if(val && val.value && (val.value.ad === 1 || val.value.ad === -1)){ next.ad = val.value.ad; }
+		this.setState(next, ()=>{
+			this.requestJieQi()
+		});
+	}
+
+	onZoneChanged(val){
+		this.setState({
+			zone: val,
+		}, ()=>{
+			this.requestJieQi()
+		});
+	}
+
+	onLatChanged(value){
+		let lon = convertLonStrToDegree(this.state.lon);
+		let lat = convertLatStrToDegree(value);
+		let geo = gcj02ToGps(lat, lon);
+
+		this.setState({
+			lat: value,
+			gpsLat: geo.lat,
+			gpsLon: geo.lon
+		});
+
+	}
+
+	onLonChanged(value){
+		let lat = convertLatStrToDegree(this.state.lat);
+		let lon = convertLonStrToDegree(value);
+		let geo = gcj02ToGps(lat, lon);
+		this.setState({
+			lon: value,
+			gpsLat: geo.lat,
+			gpsLon: geo.lon
+		});
+	}
+
+	changeGeo(rec){
+		// 选新地点时按新坐标自动校正时区(未在 atlas 内手改时区时),genParams 读 this.state.zone。
+		// setZone 仅改时区标签、保留钟面时刻(见 DateTime.setZone),不移位时间。
+		const patch = {
+			lon: convertLonToStr(rec.lng),
+			lat: convertLatToStr(rec.lat),
+			gpsLon: rec.gpsLng,
+			gpsLat: rec.gpsLat,
+		};
+		const cur = this.state.time;
+		try{
+			if(rec.zone){
+				patch.zone = rec.zone;
+				if(cur && cur.clone){ const d = cur.clone(); d.setZone(rec.zone); patch.time = d; }
+			}else{
+				const ds = (cur && cur.format) ? cur.format('YYYY-MM-DD') : null;
+				const z = dstAwareZoneAt(rec.gpsLat, rec.gpsLng, ds);
+				if(z && z.offset){
+					patch.zone = z.offset;
+					if(cur && cur.clone){ const d = cur.clone(); d.setZone(z.offset); patch.time = d; }
+				}
+			}
+		}catch(e){ /* 推断失败保留原时区 */ }
+		this.setState(patch, ()=>{
+			this.requestJieQi()
+		});
+	}
+
+	changeZodiacal(val){
+		const parsed = AstroConst.parseZodiacSelectValue(val);
+		this.setState({
+			zodiacal: parsed.zodiacal,
+			siderealAyanamsa: parsed.siderealAyanamsa,
+		}, ()=>{
+			this.requestJieQi()
+		})
+	}
+
+	changeHsys(val){
+		this.setState({
+			hsys: val,
+		}, ()=>{
+			this.requestJieQi()
+		})
+	}
+
+	onSuZhanFieldsChange(changedFields){
+		const patch = changedFields || {};
+		const mergedFields = {
+			...(this.state.fields || {}),
+			...patch,
+		};
+		const statePatch = {
+			fields: mergedFields,
+		};
+		const needReload = ['date', 'time', 'ad', 'zone', 'lat', 'lon', 'gpsLat', 'gpsLon', 'doubingSu28']
+			.some((key)=>Object.prototype.hasOwnProperty.call(patch, key));
+
+		if(patch.date && patch.date.value){
+			statePatch.time = patch.date.value;
+		}
+		if(patch.zone && patch.zone.value !== undefined && patch.zone.value !== null){
+			statePatch.zone = patch.zone.value;
+		}
+		if(patch.ad && patch.ad.value !== undefined && patch.ad.value !== null){
+			statePatch.ad = patch.ad.value;
+		}
+		if(patch.lat && patch.lat.value){
+			statePatch.lat = patch.lat.value;
+		}
+		if(patch.lon && patch.lon.value){
+			statePatch.lon = patch.lon.value;
+		}
+		if(patch.gpsLat && patch.gpsLat.value !== undefined && patch.gpsLat.value !== null){
+			statePatch.gpsLat = patch.gpsLat.value;
+		}
+		if(patch.gpsLon && patch.gpsLon.value !== undefined && patch.gpsLon.value !== null){
+			statePatch.gpsLon = patch.gpsLon.value;
+		}
+		if(patch.doubingSu28 && patch.doubingSu28.value !== undefined && patch.doubingSu28.value !== null){
+			statePatch.doubingSu28 = patch.doubingSu28.value;
+		}
+
+		this.setState(statePatch, ()=>{
+			if(needReload){
+				this.requestJieQi();
+				return;
+			}
+			this.saveCurrentJieQiSnapshot(this.state.currentTab, this.state.result, this.state.fields);
+		});
+	}
+
+	gen24JieqiDom(){
+		let dom = null;
+		if(this.state.result.jieqi24 === undefined || this.state.result.jieqi24 === null){
+			return dom;
+		}
+
+		// horosa_jieqi24_memo_v1:中栏总览只取决于 jieqi24 这一个数组(纯数据 → 纯 JSX,无 props/state
+		// 其它入参)。数组引用没变时复用上次的元素树 —— 24 张卡 ×2 行干支/纳音的 map 不再重算,
+		// 也让 React 对这段直接走 bailout。数据一变(合并出新数组)引用即变,立刻重建,不会陈旧。
+		const src = this.state.result.jieqi24;
+		if(this._jieqi24Memo && this._jieqi24Memo.src === src){
+			return this._jieqi24Memo.dom;
+		}
+
+		let cols = src.map((item, idx)=>{
+			const fourCols = getJieqiFourColumns(item);
+			const key = item && item.jieqi ? item.jieqi : `jieqi_${idx}`;
+			const yearCol = fourCols && fourCols.year ? fourCols.year : null;
+			const monthCol = fourCols && fourCols.month ? fourCols.month : null;
+			const dayCol = fourCols && fourCols.day ? fourCols.day : null;
+			const timeCol = fourCols && fourCols.time ? fourCols.time : null;
+			return (
+				<Col key={key} span={6}>
+					<Card title={item && item.jieqi ? item.jieqi : ''} bordered={false}>
+						<Row>
+							<Col span={24}>{item && item.time ? item.time : ''}</Col>
+							{
+								yearCol && (
+									<Col span={24} style={{textAlign:'center'}}>
+										<Row gutter={6}>
+											<Col span={6}>
+												{yearCol.ganzi}
+											</Col>
+											<Col span={6}>
+												{monthCol ? monthCol.ganzi : ''}
+											</Col>
+											<Col span={6}>
+												{dayCol ? dayCol.ganzi : ''}
+											</Col>
+											<Col span={6}>
+												{timeCol ? timeCol.ganzi : ''}
+											</Col>
+										</Row>
+									</Col>	
+								)
+							}
+							{
+								yearCol && (
+									<Col span={24} style={{textAlign:'center'}}>
+										<Row gutter={6}>
+											<Col span={6}>
+												{yearCol.naying}
+											</Col>
+											<Col span={6}>
+												{monthCol ? monthCol.naying : ''}
+											</Col>
+											<Col span={6}>
+												{dayCol ? dayCol.naying : ''}
+											</Col>
+											<Col span={6}>
+												{timeCol ? timeCol.naying : ''}
+											</Col>
+										</Row>
+									</Col>	
+								)
+							}
+						</Row>					
+					</Card>
+				</Col>
+			);
+		});
+
+		dom = (
+			<Row gutter={12}>
+				{cols}
+			</Row>
+		);
+		this._jieqi24Memo = { src, dom };
+		return dom;
+	}
+
+	genTabsDom(height){
+		let tabs = [];
+		const charts = this.state.result && this.state.result.charts ? this.state.result.charts : {};
+		for(let i=0; i<this.state.jieqis.length; i++){
+			let title = this.state.jieqis[i];
+			let chart = charts[title];
+			if(!chart){
+				tabs.push(
+					<TabPane tab={title+'星盘'} key={title}>
+						<div style={{ padding: 12 }}>加载中...</div>
+					</TabPane>
+				);
+				tabs.push(
+					<TabPane tab={title+'宿盘'} key={'宿盘'+title}>
+						<div style={{ padding: 12 }}>加载中...</div>
+					</TabPane>
+				);
+				tabs.push(
+					<TabPane tab={title+'3D盘'} key={'3D盘'+title}>
+						<div style={{ padding: 12 }}>加载中...</div>
+					</TabPane>
+				);
+				continue;
+			}
+			let flds = {
+				...(this.props.fields || {}),
+				...(this.state.fields || {}),
+			};
+			if(chart.params){
+				flds = paramsToFields(chart.params, flds);
+			}
+			const starKey = title;
+			const suKey = '宿盘'+title;
+			const d3Key = '3D盘'+title;
+			const renderStar = this.state.currentTab === starKey;
+			const renderSu = this.state.currentTab === suKey;
+			const render3d = this.state.currentTab === d3Key;
+			let tab = (
+				<TabPane tab={title+'星盘'} key={starKey}>
+					{renderStar ? (
+						<AstroChartMain embeddedSubChart
+							hidehsys={1}
+							hidezodiacal={1}
+							hidedateselector={true}
+							hideRecalc   /* [Q-221/T-179·FT-11] 内嵌星盘的「重算星盘」实为重算隐藏主盘,对本分至盘无意义 → 不渲染 */
+							height={height}
+							fields={flds}
+							value={chart}
+							chartDisplay={this.props.chartDisplay}
+							planetDisplay={this.props.planetDisplay}
+							lotsDisplay={this.props.lotsDisplay}
+							showPlanetHouseInfo={this.props.showPlanetHouseInfo}
+							showAstroMeaning={this.props.showAstroMeaning}
+							chartStyle={this.props.chartStyle}
+							wheelArt={this.props.wheelArt}
+							dispatch={this.props.dispatch}
+						/>) : null}
+				</TabPane>
+
+			);
+			tabs.push(tab);
+
+			let sztab = (
+				<TabPane tab={title+'宿盘'} key={suKey}>
+					{renderSu ? (
+					<SuZhanMain
+						value={chart}
+						height={height}
+						hideQuickDock={true}
+						embeddedReadOnly
+						fields={flds}
+						chartDisplay={this.props.chartDisplay}
+						planetDisplay={this.props.planetDisplay}
+						hook={this.state.hook.suzhan}
+						onFieldsChange={this.onSuZhanFieldsChange}
+						dispatch={this.props.dispatch}
+					/>) : null}
+				</TabPane>
+			);
+			tabs.push(sztab);
+
+			let tab3d = (
+				<TabPane tab={title+'3D盘'} key={d3Key}>
+					{render3d ? (
+						<AstroChartMain3D
+							hidehsys={1}
+							hidezodiacal={1}
+							hidedateselector={true}
+							needChart3D={true}
+							value={chart}
+							height={height}
+							fields={flds}
+							chartDisplay={this.props.chartDisplay}
+							planetDisplay={this.props.planetDisplay}
+							lotsDisplay={this.props.lotsDisplay}	
+							showPlanetHouseInfo={this.props.showPlanetHouseInfo}
+							showAstroMeaning={this.props.showAstroMeaning}
+						/>) : null}
+				</TabPane>
+			);
+			tabs.push(tab3d);
+
+		}
+
+		return tabs;
+	}
+
+	// 快捷栏契约:节气选择交给中栏总览网格(点即开盘),本栏只放「页面上没有」的动词——
+	// 年份翻页(左栏改时间要开日期控件多步,这里一键)与当前节气的三种视图切换。
+	// 旧版把 24 节气×3 种盘全铺成 73+ 个按钮(目录复制),已废弃。
+	// state.time 是 DateTime 实例(onTimeChanged/requestJieQi 消费同型),不能塞 moment/字符串。
+	shiftJieQiYear(delta){
+		if(delta === 0){
+			this.onTimeChanged({ value: new DateTime() });
+			return;
+		}
+		const cur = this.state.time;
+		const base = cur && cur.clone && cur.setYear ? cur.clone() : new DateTime();
+		// [Q-223/T-186·FT-22] 天文纪年无 0 年:BC1(-1)+1 曾算成 0 → setYear 把 0 复位回 BC1,「下一年」在公元前 1 年卡死;跨 0 直接跳过。
+		let target = base.ad * base.year + delta;
+		if(target === 0){ target = delta > 0 ? 1 : -1; }
+		base.setYear(target);
+		this.onTimeChanged({ value: base });
+	}
+
+	switchJieQiView(type){
+		const info = parseJieQiTab(this.state.currentTab, this.state.jieqis);
+		if(!info){
+			return;
+		}
+		const key = type === 'astro' ? info.title
+			: (type === 'suzhan' ? `宿盘${info.title}` : `3D盘${info.title}`);
+		this.changeTab(key);
+	}
+
+	renderBottomQuickDock(){
+		const info = parseJieQiTab(this.state.currentTab, this.state.jieqis);
+		const onChartTab = !!info;
+		const hasCharts = !!(this.state.result && this.state.result.charts
+			&& Object.keys(this.state.result.charts).length);
+		return (
+			<QuickDockBar
+				page="jieqi"
+				className="horosa-jieqi-quick-dock"
+				hasResult={hasCharts || (this.state.jieqis || []).length > 0}
+				primary={{
+					key: 'overview',
+					label: '二十四节气',
+					active: this.state.currentTab === '二十四节气',
+					onClick: ()=>this.changeTab('二十四节气'),
+				}}
+				extras={[
+					{ key: 'prevYear', label: '上一年', icon: 'quickTransit', needsResult: false, onClick: ()=>this.shiftJieQiYear(-1) },
+					{ key: 'thisYear', label: '回今年', icon: 'quickComposite', needsResult: false, onClick: ()=>this.shiftJieQiYear(0) },
+					{ key: 'nextYear', label: '下一年', icon: 'quickTransit', needsResult: false, onClick: ()=>this.shiftJieQiYear(1) },
+					{ key: 'viewAstro', label: '星盘', icon: 'quickNote', disabled: !onChartTab, active: onChartTab && info.type === 'astro', onClick: ()=>this.switchJieQiView('astro') },
+					{ key: 'viewSuzhan', label: '宿盘', icon: 'quickReturn', disabled: !onChartTab, active: onChartTab && info.type === 'suzhan', onClick: ()=>this.switchJieQiView('suzhan') },
+					{ key: 'view3d', label: '3D盘', icon: 'quickComposite', disabled: !onChartTab, active: onChartTab && info.type === 'astro3d', onClick: ()=>this.switchJieQiView('astro3d') },
+				]}
+				dispatch={this.props.dispatch}
+			/>
+		);
+	}
+
+	componentDidMount(){
+		this.unmounted = false;
+		// 3D 盘 chunk 空闲预热:不打开 3D 页签=零成本,真去点时通常已就绪。卸载时必须 cancel。
+		this._cancel3dWarm = idleWarm(AstroChartMain3D, { timeout: 2500 });
+		if(typeof window !== 'undefined'){
+			window.addEventListener('horosa:refresh-module-snapshot', this.handleSnapshotRefreshRequest);
+		}
+		if(this.props.fields){
+			let st = fieldsToState(this.props.fields);
+			this.setState(st, ()=>{
+				if(this.unmounted){
+					return;
+				}
+				this.requestJieQi();
+			});
+		}else{
+			this.requestJieQi();
+		}
+	}
+
+	// horosa_shallow_scu_v1:本组件此前**无 sCU**,父层(pages/index.js)任何一次 re-render 都会
+	// 让这棵 1800 行的树连同 24 张卡片 + 右栏盘整树重算。这里只做「props 与 state 都逐键同引用
+	// 才跳过」的最保守判断:任何键的引用变化(含 result/fields/time/hook)一律返回 true 照常渲染,
+	// 键数不同也返回 true。因此只会跳过**输入完全没变**的重复渲染,不可能漏更新。
+	shouldComponentUpdate(nextProps, nextState){
+		if(!shallowSame(this.props, nextProps)){ return true; }
+		if(!shallowSame(this.state, nextState)){ return true; }
+		return false;
+	}
+
+	componentDidUpdate(prevProps){
+		const fieldsChanged = prevProps.fields !== this.props.fields;
+		const planetChanged = prevProps.planetDisplay !== this.props.planetDisplay;
+		if(!fieldsChanged && !planetChanged){
+			return;
+		}
+		if(this.state.currentTab && this.state.currentTab.indexOf('宿盘') >= 0){
+			this.saveCurrentJieQiSnapshot(this.state.currentTab, this.state.result, this.state.fields);
+		}
+	}
+
+	componentWillUnmount(){
+		this.unmounted = true;
+		if(this._cancel3dWarm){ this._cancel3dWarm(); this._cancel3dWarm = null; }
+		if(typeof window !== 'undefined'){
+			window.removeEventListener('horosa:refresh-module-snapshot', this.handleSnapshotRefreshRequest);
+		}
+		if(this.snapshotTimer){
+			if(typeof window !== 'undefined' && typeof window.cancelIdleCallback === 'function'){
+				window.cancelIdleCallback(this.snapshotTimer);
+			}else{
+				clearTimeout(this.snapshotTimer);
+			}
+			this.snapshotTimer = null;
+		}
+	}
+
+	render(){
+		let height = this.props.height ? this.props.height : 760;
+		let contentHeight = height;
+		if(height === '100%'){
+			contentHeight = '100%';
+		}else if(typeof height === 'number'){
+			contentHeight = Math.max(260, height - 118);
+		}
+		let style = {
+			height: '100%',
+			overflowY:'auto', 
+			overflowX:'hidden',
+		};
+
+
+		const tabs = this.genTabsDom(contentHeight);
+
+		let jieqi24dom = this.gen24JieqiDom();
+
+		let showInput = true;
+		if(this.state.currentTab.indexOf('宿盘') >= 0){
+			showInput = false;
+		}
+
+		return (
+			// position:relative=角标定位上下文;多盘网格统一一枚角标(不逐张小盘各挂)
+			<div id={this.state.divid} className="horosa-jieqi-page" style={{position: 'relative'}}>
+				{this.state.updating && this.state.result && this.state.result.charts && Object.keys(this.state.result.charts).length > 0 ? <UpdatingBadge /> : null}
+				{
+					showInput && (
+					<Row className="horosa-jieqi-toolbar" gutter={6} align="middle">
+						<Col span={8}>
+							<DateTimeSelector
+								value={this.state.time}
+								onlyYear={true}
+								showTime={false}
+								showAdjust={false}
+								onChange={this.onTimeChanged}
+							/>
+						</Col>
+						<Col span={3}>
+							<Select
+								style={{width: '100%'}}
+								onChange={this.changeZodiacal}
+								dropdownMatchSelectWidth={false}
+								value={AstroConst.zodiacSelectValue(this.state.zodiacal, this.state.siderealAyanamsa)} size='small'>
+								{AstroConst.groupOptions(AstroConst.buildZodiacOptions()).map((grp)=>(
+									<OptGroup label={grp.group} key={grp.group}>
+										{grp.items.map((item)=>(<Option value={item.value} key={item.value}>{item.label}</Option>))}
+									</OptGroup>
+								))}
+							</Select>
+						</Col>
+						<Col span={3}>
+							<Select style={{width:140}}
+								onChange={this.changeHsys}
+								value={this.state.hsys} 
+								size='small'>
+								{/* [Q-223/T-186·FT-21] 本页继承主盘宫制:主盘 25 档,此前只列 9 档 → 继承第 10–25 档时显示裸数字且无法重选 */}
+								{ getHousesOption(true) }
+							</Select>
+						</Col>
+						<Col span={2}>
+							<GeoCoordModal 
+								onOk={this.changeGeo}
+								lat={this.state.gpsLat} lng={this.state.gpsLon}
+							>
+								<Button size='small'>经纬度选择</Button>
+							</GeoCoordModal>
+						</Col>
+						<Col span={4}>
+							<span>{this.state.lon + ' ' + this.state.lat}</span>
+						</Col>
+					</Row>
+	
+					)
+				}
+				<Tabs 
+					activeKey={this.state.currentTab}
+					tabPosition='right'
+					onChange={this.changeTab}
+					destroyInactiveTabPane={true}
+					className="horosa-jieqi-tabs"
+					style={{ height: '100%' }}
+				>
+					<TabPane tab='二十四节气' key='二十四节气'>
+						<div className={styles.scrollbar} style={style}>
+						{jieqi24dom}
+						</div>
+					</TabPane>
+					{ tabs }
+				</Tabs>
+				{this.renderBottomQuickDock()}
+			</div>
+		);
+	}
+}
+
+export default JieQiChartsMain;

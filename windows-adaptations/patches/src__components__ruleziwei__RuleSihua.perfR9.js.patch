@@ -1,0 +1,24 @@
+diff --git a/astrostudyui/src/components/ruleziwei/RuleSihua.js b/astrostudyui/src/components/ruleziwei/RuleSihua.js
+index 9eaaf14e..5a8d784f 100644
+--- a/astrostudyui/src/components/ruleziwei/RuleSihua.js
++++ b/astrostudyui/src/components/ruleziwei/RuleSihua.js
+@@ -1,7 +1,9 @@
+ import { Component } from 'react';
+ import { Row, Col, Popover, } from 'antd';
+-import {randomStr,} from '../../utils/helper';
+ import * as ZWConst from '../../constants/ZWConst';
++// horosa_stable_react_keys_v1(PERF-R9):本文件的 React key 已从 randomStr(8) 改为内容派生的稳定 key。
++// 随机 key 每次渲染都变 → React 无法 diff → 整棵子树卸载重建。此标记供 apply.sh 的
++// 幂等守卫与发布哨兵定位;删除它会让重同步后无法自动还原本改动。
+ 
+ class RuleSihua extends Component{
+ 	constructor(props) {
+@@ -87,7 +89,7 @@ class RuleSihua extends Component{
+ 
+ 		return (
+ 			<div>
+-				<Row key={randomStr(8)}>
++				<Row key='sihua-header'>
+ 					<Col span={4}>天干</Col>
+ 					<Col span={5} style={ZWConst.SihuaColor[0]}>
+ 						<Popover content={rules[0]} title={'化' + ZWConst.SiHua.hua[0]}>

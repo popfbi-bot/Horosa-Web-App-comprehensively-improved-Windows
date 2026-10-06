@@ -1,0 +1,924 @@
+import { history } from 'umi';
+import { safeLocalStorageSet } from '../utils/safeStorage';
+// 主限法 方法 / 时间钥匙 同时住在 app 状态(globalSetup 持久化,启动时 applyPredictiveSetupToFields 写回 fields)与 fields;
+// 二者由同一个入口(applyPrimaryDirectionConfig)一起写,初值与回退都取「新盘种子」,两条链才不会各说各话。
+import { newChartSeedValue } from '../utils/newChartSeeds';
+import { Modal,  } from 'antd';
+import {getStore, } from '../utils/storageutil';
+import * as Constants from '../utils/constants';
+import { waitForBackendBoot } from '../utils/backendBootGate';
+import { restoredSubTab } from '../constants/SubTabRegistry';
+import * as appService from '../services/app';
+import {setDispatch} from '../utils/request';
+import {detectPlatform} from '../utils/helper';
+import { loadBootChartSnapshot } from '../utils/bootChartRestore';   // [R5 S7] 温启直接显示上次的盘
+import * as AstroConst from '../constants/AstroConst';
+import { setTmDelta } from '../utils/request';
+import { normalizeAppearanceMode } from '../utils/appearance';
+import { CONTAINER_HEIGHT_SANITY_MIN } from '../utils/zoomDomain';
+import { normalizeDayBoundary, DAY_BOUNDARY_AFTER23, normalizeLateZiHourMode, LATE_ZI_HOUR_NEXT_DAY } from '../utils/dayBoundary';
+import { normalizeZeriSnapshotMaxRows, normalizeZeriSnapshotExplainRows, ZERI_SNAPSHOT_MAX_ROWS_DEFAULT, ZERI_SNAPSHOT_EXPLAIN_ROWS_DEFAULT } from '../utils/zeriSnapshotPrefs';
+
+const MinWorkspaceHeight = 660;
+// 页头预留量。**仅供兜底路径**(容器量不到时才按整窗视口减页头)——主路径已改为直接量
+// #mainContent,页头占位天然含在容器高度里,不再依赖这个魔数。
+// 保留它的历史教训:旧值 88 比容器多扣 16px,曾造成全站每页底部恒定 16px 空白栏。
+const WorkspaceReservedHeight = 72;
+const ChartDisplayDefaultsVersion = 2;
+const PlanetDisplayDefaultsVersion = 2;
+const DefaultHouseSystem = 1;
+const HouseSystemDefaultsVersion = 2;
+const HouseSystemDefaultVersionKey = 'horosaHouseSystemDefaultsVersion';
+const ChartDisplayDefaultOffOptions = new Set([
+    AstroConst.CHART_SIGNRULER,
+    AstroConst.CHART_TERM,
+    AstroConst.CHART_OUTERDEG,
+    AstroConst.CHART_INNERDEG,
+]);
+const PlanetDisplayDefaultOffOptions = new Set([
+    AstroConst.DARKMOON,
+    AstroConst.PURPLE_CLOUDS,
+    AstroConst.DESC,
+    AstroConst.IC,
+]);
+
+function normalizeWorkspaceHeight(viewportHeight){
+    const raw = Number(viewportHeight) - WorkspaceReservedHeight;
+    if(!Number.isFinite(raw)){
+        return MinWorkspaceHeight;
+    }
+    return raw <= MinWorkspaceHeight ? MinWorkspaceHeight : raw;
+}
+
+function normalizeDisplayList(raw, fallback, allowSet, allowEmpty = false){
+    const fallbackArr = Array.isArray(fallback) ? fallback.slice(0) : [];
+    const allow = new Set(Array.isArray(allowSet) ? allowSet : []);
+
+    let arr = raw;
+    let fromExplicitArray = Array.isArray(arr);
+    if(!Array.isArray(arr)){
+        if(typeof arr === 'string' && arr){
+            arr = [arr];
+        }else{
+            arr = fallbackArr;
+            fromExplicitArray = false;
+        }
+    }
+
+    const uniq = [];
+    const seen = new Set();
+    for(let i=0; i<arr.length; i++){
+        const id = arr[i];
+        if(typeof id !== 'string'){
+            continue;
+        }
+        if(allow.size > 0 && !allow.has(id)){
+            continue;
+        }
+        if(seen.has(id)){
+            continue;
+        }
+        seen.add(id);
+        uniq.push(id);
+    }
+    if(uniq.length > 0){
+        return uniq;
+    }
+    if(allowEmpty && fromExplicitArray){
+        return [];
+    }
+    return fallbackArr;
+}
+
+function normalizeGlobalSetup(setup){
+    if(!setup || typeof setup !== 'object'){
+        return setup;
+    }
+    const normalized = { ...setup };
+    if(normalized.chartDisplayDefaultsVersion !== ChartDisplayDefaultsVersion){
+        if(Array.isArray(normalized.chartDisplay)){
+            normalized.chartDisplay = normalized.chartDisplay.filter((opt)=>!ChartDisplayDefaultOffOptions.has(Number(opt)));
+        }
+        normalized.chartDisplayDefaultsVersion = ChartDisplayDefaultsVersion;
+    }
+    if(normalized.planetDisplayDefaultsVersion !== PlanetDisplayDefaultsVersion){
+        if(Array.isArray(normalized.planetDisplay)){
+            normalized.planetDisplay = normalized.planetDisplay.filter((opt)=>!PlanetDisplayDefaultOffOptions.has(opt));
+        }
+        normalized.planetDisplayDefaultsVersion = PlanetDisplayDefaultsVersion;
+    }
+    normalized.chartStyle = AstroConst.normalizeChartStyle(normalized.chartStyle);
+    normalized.wheelArt = AstroConst.normalizeWheelArt(normalized.wheelArt);
+    if(normalized.planetListStyle !== 'degreeOnly' && normalized.planetListStyle !== 'glyphOnly'){ normalized.planetListStyle = 'full'; }
+    normalized.indiaChartStyle = AstroConst.normalizeIndiaChartStyle(normalized.indiaChartStyle);
+    normalized.dayBoundary = normalizeDayBoundary(normalized.dayBoundary);
+    normalized.lateZiHourMode = normalizeLateZiHourMode(normalized.lateZiHourMode);
+    // [Q-452/Q-453] 择日 AI 快照命中清单上限 / 附判读树行数(缺省 60 / 3)
+    normalized.zeriSnapshotMaxRows = normalizeZeriSnapshotMaxRows(normalized.zeriSnapshotMaxRows);
+    normalized.zeriSnapshotExplainRows = normalizeZeriSnapshotExplainRows(normalized.zeriSnapshotExplainRows);
+    return normalized;
+}
+
+function shouldMigrateHouseSystemDefault(hsys){
+    if(hsys === undefined || hsys === null || hsys === ''){
+        return true;
+    }
+    if(Number(hsys) !== 0){
+        return false;
+    }
+    try{
+        return localStorage.getItem(HouseSystemDefaultVersionKey) !== `${HouseSystemDefaultsVersion}`;
+    }catch(e){
+        return false;
+    }
+}
+
+function markHouseSystemDefaultMigrated(){
+    try{
+        safeLocalStorageSet(HouseSystemDefaultVersionKey, `${HouseSystemDefaultsVersion}`);
+    }catch(e){
+        // Ignore storage failures; the in-memory default still applies for this session.
+    }
+}
+
+function normalizeUserHouseSystem(hsys){
+    const numeric = Number(hsys);
+    const normalized = shouldMigrateHouseSystemDefault(hsys) || !Number.isFinite(numeric) ? DefaultHouseSystem : numeric;
+    markHouseSystemDefaultMigrated();
+    return normalized;
+}
+
+function userInfoToFields(flds, userInfo){
+    flds.doubingSu28.value = userInfo.doubingSu28;
+    flds.simpleAsp.value = userInfo.simpleAsp;
+    flds.strongRecption.value = userInfo.strongRecption;
+    flds.virtualPointReceiveAsp.value = userInfo.virtualPntReceiveAsp;
+    flds.hsys.value = normalizeUserHouseSystem(userInfo.hsys);
+    flds.zodiacal.value = userInfo.zodiacal;
+    flds.predictive.value = userInfo.predictive;
+    flds.tradition.value = userInfo.tradition;
+    flds.gpsLon.value = userInfo.gpsLon;
+    flds.gpsLat.value = userInfo.gpsLat;
+    flds.lat.value = userInfo.lat;
+    flds.lon.value = userInfo.lon;    
+    if(userInfo.pdaspects){
+        flds.pdaspects.value = userInfo.pdaspects;
+    }
+}
+
+// [R5 S7] 启动首盘二选一:setup 里已按快照重放上次的盘(pending / done)→ 只落 fields(预测设置 / 用户档),不再起
+// 「此刻」盘;无快照 / 恢复失败(failed)/ 用户已先动手(dropped)→ 今日路径「此刻」。
+const BOOT_RESTORE_PENDING_TIMEOUT_MS = 30000;
+// 兜底计时从「后端可达」起算:桌面壳提前导航(early)时后端可能要几十秒才起(更新后首启常见),若从页面挂载起算,
+// 恢复请求还在就绪门里排队就会被判失败、另起「此刻」盘(恢复白费且多一次冷算)。非 early 模式就绪门立即返回,计时同旧。
+async function bootRestoreWait(ms){
+    try{ await waitForBackendBoot(`${Constants.ServerRoot}/chart`); }catch(e){ /* 门异常不影响兜底计时 */ }
+    await new Promise((resolve)=>setTimeout(resolve, ms));
+}
+export function* bootChartOrNow(fld, select, put, call){
+    const astrost = yield select((s)=>s.astro);
+    const flag = astrost ? astrost.bootChartRestore : null;
+    if(flag === 'pending' || flag === 'done'){
+        yield put({ type: 'astro/save', payload: { fields: fld, bootFieldsApplied: true } });
+        if(flag === 'pending' && typeof call === 'function'){
+            // 兜底:恢复若既没成功也没标 failed / dropped(例如重放链路抛了异常),不能让首屏永远空着 ——
+            // 等一段后仍 pending 且没有任何盘 → 回今日路径「此刻」(有盘 / 已换态则什么都不做)
+            yield call(bootRestoreWait, BOOT_RESTORE_PENDING_TIMEOUT_MS);
+            const later = yield select((s)=>s.astro);
+            if(later && later.bootChartRestore === 'pending' && !later.chartObj){
+                yield put({ type: 'astro/save', payload: { bootChartRestore: 'failed' } });
+                yield put({ type: 'astro/nowChart', payload: { fields: later.fields || fld } });
+            }
+        }
+        return;
+    }
+    yield put({ type: 'astro/nowChart', payload: { fields: fld } });
+}
+
+function applyPredictiveSetupToFields(flds, appst){
+    if(!flds || !appst){
+        return;
+    }
+    if(flds.showPdBounds){
+        flds.showPdBounds.value = appst.showPdBounds === 0 ? 0 : 1;
+    }
+    if(flds.pdMethod){
+        flds.pdMethod.value = appst.pdMethod || newChartSeedValue('pdMethod');
+    }
+    if(flds.pdTimeKey){
+        flds.pdTimeKey.value = appst.pdTimeKey || newChartSeedValue('pdTimeKey');
+    }
+}
+
+export default {
+
+    namespace: 'app',
+
+    state: {
+        systime: null,
+        theme: 'light',
+        appearanceMode: 'system',
+        resolvedAppearance: 'light',
+        loading: false,
+        loadingText: null,
+        refresh: false,
+        tokenImg: null,
+        imgTokenListName: null,
+
+        chartDisplay: AstroConst.CHART_DEFAULTOPTS,
+        chartStyle: AstroConst.CHART_STYLE_CURRENT,
+        wheelArt: AstroConst.WHEEL_ART_CLASSIC,
+        planetListStyle: 'full',   // [WP-9] 行星列表密度:full/degreeOnly/glyphOnly
+        indiaChartStyle: AstroConst.INDIA_CHART_STYLE_SOUTH,
+        planetDisplay: AstroConst.DEFAULT_OBJECTS,
+        lotsDisplay: AstroConst.DEFAULT_LOTS,
+        colorTheme: AstroConst.DefaultColorTheme,
+        aspects: AstroConst.DEFAULT_ASPECTS,
+        showPdBounds: 1,
+        pdMethod: newChartSeedValue('pdMethod'),   // 新盘种子(缺省 'core_alchabitius';globalSetup 有值时启动效果里以它为准)
+        pdTimeKey: newChartSeedValue('pdTimeKey'), // 新盘种子(缺省 'Ptolemy')
+        showPlanetHouseInfo: 0,
+        showAstroMeaning: 0,
+        showOnlyRulExaltReception: 0,
+        voidClassical: 0,                  // G10 空亡古典义(30°内):默认 OFF=按本座义(现状);开=固定 30°窗口。星盘设置开关,格局页相位动态读此重算。
+        schoolPreset: 'brennan',           // G20 流派预设(默认 brennan = 现状默认四维 → 零回归)
+        tripSystem: 'Dorothean',           // 三分体系(默认多罗特 = 三分主星页现状默认)
+        dayBoundary: DAY_BOUNDARY_AFTER23,
+        lateZiHourMode: LATE_ZI_HOUR_NEXT_DAY,
+        zeriSnapshotMaxRows: ZERI_SNAPSHOT_MAX_ROWS_DEFAULT,          // [Q-452] 择日快照命中清单上限(缺省 60=现状)
+        zeriSnapshotExplainRows: ZERI_SNAPSHOT_EXPLAIN_ROWS_DEFAULT,  // [Q-453] 前 N 行附判读树(缺省 3;0=不附)
+        chartDisplayDefaultsVersion: ChartDisplayDefaultsVersion,
+        planetDisplayDefaultsVersion: PlanetDisplayDefaultsVersion,
+
+        loginFields:{
+            loginId: {
+                value: null,
+                name: ['oginId'],
+            },
+            pwd: {
+                value: null,
+                name: ['pwd'],
+            },
+        },
+
+        registerFields:{
+            loginId: {
+                value: null,
+                name: ['loginId'],
+            },
+            pwd: {
+                value: null,
+                name: ['pwd'],
+            },
+            imgToken:{
+                value: null,
+                name: ['imgToken'],
+            },
+        },
+    },
+
+    reducers: {
+        save(state, {payload: values}) {
+            const payload = { ...(values || {}) };
+            if(Object.prototype.hasOwnProperty.call(payload, 'planetDisplay')){
+                payload.planetDisplay = normalizeDisplayList(
+                    payload.planetDisplay,
+                    state.planetDisplay,
+                    AstroConst.LIST_POINTS,
+                    true
+                );
+            }
+            if(Object.prototype.hasOwnProperty.call(payload, 'lotsDisplay')){
+                payload.lotsDisplay = normalizeDisplayList(
+                    payload.lotsDisplay,
+                    state.lotsDisplay,
+                    AstroConst.LOTS,
+                    true
+                );
+            }
+            if(Object.prototype.hasOwnProperty.call(payload, 'chartStyle')){
+                payload.chartStyle = AstroConst.normalizeChartStyle(payload.chartStyle);
+            }
+            if(Object.prototype.hasOwnProperty.call(payload, 'wheelArt')){
+                payload.wheelArt = AstroConst.normalizeWheelArt(payload.wheelArt);
+            }
+            if(Object.prototype.hasOwnProperty.call(payload, 'planetListStyle')){
+                const pls = payload.planetListStyle;
+                payload.planetListStyle = (pls === 'degreeOnly' || pls === 'glyphOnly') ? pls : 'full';
+            }
+            if(Object.prototype.hasOwnProperty.call(payload, 'indiaChartStyle')){
+                payload.indiaChartStyle = AstroConst.normalizeIndiaChartStyle(payload.indiaChartStyle);
+            }
+
+            let st = { ...state, ...payload };
+            st.appearanceMode = normalizeAppearanceMode(st.appearanceMode);
+            let globalSetup = {
+                chartDisplay: st.chartDisplay,
+                chartStyle: st.chartStyle,
+                wheelArt: st.wheelArt,
+                planetListStyle: st.planetListStyle,
+                indiaChartStyle: st.indiaChartStyle,
+                planetDisplay: st.planetDisplay,
+                lotsDisplay: st.lotsDisplay,
+                colorTheme: st.colorTheme,
+                appearanceMode: st.appearanceMode,
+                showPdBounds: st.showPdBounds,
+                pdMethod: st.pdMethod,
+                pdTimeKey: st.pdTimeKey,
+                showPlanetHouseInfo: st.showPlanetHouseInfo,
+                showAstroMeaning: st.showAstroMeaning,
+                showOnlyRulExaltReception: st.showOnlyRulExaltReception,
+                schoolPreset: st.schoolPreset,
+                tripSystem: st.tripSystem,
+                dayBoundary: st.dayBoundary,
+                lateZiHourMode: st.lateZiHourMode,
+                zeriSnapshotMaxRows: st.zeriSnapshotMaxRows,
+                zeriSnapshotExplainRows: st.zeriSnapshotExplainRows,
+                chartDisplayDefaultsVersion: ChartDisplayDefaultsVersion,
+                planetDisplayDefaultsVersion: PlanetDisplayDefaultsVersion,
+            };
+            let json = JSON.stringify(globalSetup);
+            safeLocalStorageSet(Constants.GlobalSetupKey, json);
+
+            return st;
+        },
+
+    },
+
+    effects: {
+        *fetchImgToken({payload: values}, {call, put}){
+            const {Result} = yield call(appService.getImgToken);
+
+            yield put({
+                type: 'save',
+                payload: {
+                    tokenImg: 'data:image/jpeg;base64,' + Result.TokenImg,
+                    imgTokenListName: Result.ImgTokenListName,
+                },
+            });
+        },
+
+        *login({payload: values}, { call, put, select }){
+            if(values.rememberMe){
+                safeLocalStorageSet(Constants.LoginIdKey, values.loginId);
+            }else{
+                localStorage.removeItem(Constants.LoginIdKey);
+            }
+
+            let params = {
+                LoginId: values.loginId,
+                Pwd: values.pwd,
+            };
+            const {Result} = yield call(appService.login, params);
+ 
+            safeLocalStorageSet(Constants.TokenKey, Result.Token);
+
+            const usrdata = {
+                token: Result.Token,
+                userInfo: Result.User,
+                charts: Result.Charts,
+                total: Result.ChartsTotal,
+                admin: Result.IsAdmin ? true : false,
+            };
+
+            const store = yield select((s)=>s);
+            const astrost = store.astro;
+            const appst = store.app;
+
+            const fld = {
+                ...astrost.fields,                
+            }
+            userInfoToFields(fld, Result.User);
+            applyPredictiveSetupToFields(fld, appst);
+            
+            yield put({
+                type: 'astro/save',
+                payload: {
+                    fields: fld,
+                },
+            });
+
+            yield put({
+                type: 'astro/closeDrawer',
+                payload: {},
+            });
+
+            yield put({
+                type: 'user/save',
+                payload: {
+                    ...usrdata,
+                },
+            });
+
+            yield put({
+                type: 'astro/doHook',
+                payload: {
+                    fields: fld,
+                },
+            });    
+
+       },
+
+        *register({payload: values}, { call, put, select }){
+            const store = yield select((s)=>s);
+            const state = store.app;
+
+            let params = {
+                LoginId: values.loginId,
+                Pwd: values.pwd,
+                ImgToken: values.imgToken,
+            };
+            let headers = {
+                ImgTokenListName: state.imgTokenListName,
+            };
+            const {Result} = yield call(appService.register, params, headers);
+
+            safeLocalStorageSet(Constants.TokenKey, Result.Token);
+
+            const usrdata = {
+                token: Result.Token,
+                userInfo: Result.User,
+            };
+
+            yield put({
+                type: 'astro/closeDrawer',
+                payload: {},
+            });
+
+            yield put({
+                type: 'user/save',
+                payload: {
+                    ...usrdata,
+                },
+            });
+            
+        },
+
+		*resetPwd({ payload: values }, { call, put, select }){
+            let params = {
+				LoginId: values.loginId,
+                ImgToken: values.imgToken,
+			};
+			
+            const store = yield select((s)=>s);
+            const state = store.app;
+
+            let headers = {
+                ImgTokenListName: state.imgTokenListName,
+            };
+			const { Result } = yield call(appService.resetpwd, params, headers);
+
+            yield put({
+                type: 'astro/closeDrawer',
+                payload: {},
+            });
+
+            Modal.success({
+                title: '新密码已发送到您的邮箱，请尽快修改密码。'
+            });
+		},
+
+
+        *checkUser({ payload: values }, { call, put, select }) {
+            const param = {};
+            let setupJson = localStorage.getItem(Constants.GlobalSetupKey);
+            if(setupJson){
+                let json = null;
+                // 本地 globalSetup 损坏不能炸掉本 effect:它在 token 校验之前,炸了 = 每次启动静默登出 + 全局设置全不生效
+                try{ json = normalizeGlobalSetup(JSON.parse(setupJson)); }catch(e){ json = null; }
+                if(json && json.colorTheme !== undefined){
+                    json.colorTheme = AstroConst.normalizeColorThemeIndex(json.colorTheme);
+                }
+                if(json && json.appearanceMode !== undefined){
+                    json.appearanceMode = normalizeAppearanceMode(json.appearanceMode);
+                }
+                if(json){
+                    yield put({
+                        type: 'save',
+                        payload: json,
+                    });
+                }
+            }
+
+            const rsp = yield call(appService.checkUser, param);
+            if(!rsp || !rsp.Result){
+                localStorage.removeItem(Constants.TokenKey);
+                const store = yield select((s)=>s);
+                const astrost = store.astro;
+                const appst = store.app;
+                const fld = {
+                    ...astrost.fields,
+                };
+                applyPredictiveSetupToFields(fld, appst);
+                yield put({
+                    type: 'user/save',
+                    payload: {
+                        token: null,
+                        charts: [],
+                        userInfo: null,
+                        admin: false,
+                    },
+                });
+                yield* bootChartOrNow(fld, select, put, call);   // [R5 S7]
+                return;
+            }
+            const Result = rsp.Result;
+
+            if(Result.Token === undefined || Result.Token === null){
+                const store = yield select((s)=>s);
+                const astrost = store.astro;
+                const appst = store.app;
+                const fld = {
+                    ...astrost.fields,
+                };
+                applyPredictiveSetupToFields(fld, appst);
+                yield* bootChartOrNow(fld, select, put, call);   // [R5 S7]
+                return;
+            }
+            
+            safeLocalStorageSet(Constants.TokenKey, Result.Token);
+
+            const usrdata = {
+                token: Result.Token,
+                userInfo: Result.User,
+                charts: Result.Charts,
+                total: Result.ChartsTotal,
+                admin: Result.IsAdmin ? true : false,
+            };
+
+            const store = yield select((s)=>s);            
+            const astrost = store.astro;
+            const appst = store.app;
+
+            const fld = {
+                ...astrost.fields,                
+            }
+            userInfoToFields(fld, Result.User);
+            applyPredictiveSetupToFields(fld, appst);
+            
+            yield put({
+                type: 'user/save',
+                payload: {
+                    ...usrdata,
+                },
+            });
+
+            yield* bootChartOrNow(fld, select, put, call);   // [R5 S7]
+
+        },
+
+        *checkOnlyUser({ payload: values }, { call, put, select }) {
+            const param = {
+                PageIndex: 1,
+                PageSize: 30,
+            };
+            let setupJson = localStorage.getItem(Constants.GlobalSetupKey);
+            if(setupJson){
+                let json = null;
+                try{ json = normalizeGlobalSetup(JSON.parse(setupJson)); }catch(e){ json = null; }
+                if(json && json.colorTheme !== undefined){
+                    json.colorTheme = AstroConst.normalizeColorThemeIndex(json.colorTheme);
+                }
+                if(json && json.appearanceMode !== undefined){
+                    json.appearanceMode = normalizeAppearanceMode(json.appearanceMode);
+                }
+                if(json){
+                    yield put({
+                        type: 'save',
+                        payload: json,
+                    });
+                }
+            }
+
+            const rsp = yield call(appService.checkUser, param);
+            if(!rsp || !rsp.Result){
+                localStorage.removeItem(Constants.TokenKey);
+                yield put({
+                    type: 'user/save',
+                    payload: {
+                        token: null,
+                        charts: [],
+                        userInfo: null,
+                        admin: false,
+                    },
+                });
+                return;
+            }
+            const Result = rsp.Result;
+            
+            safeLocalStorageSet(Constants.TokenKey, Result.Token);
+
+            const usrdata = {
+                token: Result.Token,
+                userInfo: Result.User,
+                admin: Result.IsAdmin ? true : false,
+            };
+
+            const store = yield select((s)=>s);
+            const astrost = store.astro;
+            const appst = store.app;
+
+            const fld = {
+                ...astrost.fields,                
+            }
+            userInfoToFields(fld, Result.User);
+            applyPredictiveSetupToFields(fld, appst);
+            
+            yield put({
+                type: 'astro/save',
+                payload: {
+                    fields: fld,
+                },
+            });
+
+           yield put({
+                type: 'user/save',
+                payload: {
+                    ...usrdata,
+                },
+            });
+
+        },
+
+        *logout({ payload:values }, { put, call }){
+            const usrToken = localStorage.getItem(Constants.TokenKey);
+            const skipRemote = !!(values && values.skipRemote);
+            localStorage.removeItem(Constants.TokenKey);
+            try{
+                if(!skipRemote && usrToken){
+                    yield call(appService.logout);
+                }
+            }catch(e){
+            }
+            yield put({
+                type: 'user/save',
+                payload: {
+                    token: null,
+                    charts: [],
+                    userInfo: null,
+                    admin: false,
+                },
+            });
+
+        },
+
+        *menuClick({ payload:values }, { put, call }){
+            if(values.key === 'logout'){
+                yield put({
+                    type: 'logout',
+                    payload: {},
+                });
+    
+            }else{
+                yield put({
+                    type: 'astro/openDrawer',
+                    payload: {
+                        key: values.key
+                    },
+                });    
+            }
+   
+        },
+
+        *getSysTime({ payload:values }, { put, call }){
+            const Result = yield call(appService.systime);
+            if(Result === undefined || Result === null){
+                return;
+            }
+            yield put({
+                type: 'save',
+                payload: {
+                    systime: Result,
+                },
+            });    
+			let tm = new Number(Result);
+			let dt = new Date();
+			let tmS = dt.getTime();
+			let delta = tmS - tm;
+			setTmDelta(delta);
+        },
+
+        *beginRefresh({ payload:values }, { put, call }){
+            yield put({
+                type: 'save',
+                payload: {
+                    refresh: true,
+                    loading: true,
+                },
+            });    
+        },
+
+        *endRefresh({ payload:values }, { put, call }){
+            yield put({
+                type: 'save',
+                payload: {
+                    refresh: false,
+                    loading: false,
+                },
+            });        
+        },
+
+    },
+
+    subscriptions: {
+        setup({ dispatch, history }) {
+            let docw = document.documentElement.clientWidth;
+            let doch = document.documentElement.clientHeight;
+            let mindim = Math.min(docw, doch);
+            let platform = detectPlatform();
+            const isLocalHost = window.location.protocol === 'file:' ||
+                window.location.hostname === 'localhost' ||
+                window.location.hostname === '127.0.0.1';
+            if(platform === 'IPhone' || platform === 'IPod' || 
+                (platform === 'Android' && mindim < 600)){
+                    if(!isLocalHost){
+                    window.location.href = Constants.MobileServer;
+                    }
+            }
+            // alert(platform + '; ' + mindim + '; ' + navigator.userAgent + '; ' + navigator.platform);
+
+            setDispatch(dispatch);
+            const { location } = history;
+            const { query } = location;
+            if(location.pathname === '/' || location.pathname === ''){
+                dispatch({
+                    type: 'checkUser',
+                    payload:{},
+                });                           
+            }
+
+            let aspects = localStorage.getItem(AstroConst.AspKey);
+            if(aspects === undefined || aspects === null){
+                aspects = AstroConst.DEFAULT_ASPECTS;
+                safeLocalStorageSet(AstroConst.AspKey, JSON.stringify(aspects));
+            }else{
+                // 启动订阅里的损坏值会让整个 app 起不来 → 回默认并自愈重写(画盘端读取已有同款守卫)
+                try{ aspects = JSON.parse(aspects); }catch(e){
+                    aspects = AstroConst.DEFAULT_ASPECTS;
+                    try{ safeLocalStorageSet(AstroConst.AspKey, JSON.stringify(aspects)); }catch(e2){ /* ignore */ }
+                }
+            }
+            if(!Array.isArray(aspects)){
+                aspects = AstroConst.DEFAULT_ASPECTS;
+            }
+            const dispatchWorkspaceHeight = (h, extraPayload)=>{
+                // 🔴 这里曾是 `h < MinWorkspaceHeight(660) → 不派发`:缩放 1.5 档容器只有 595 时,正确的高度反而被拦下,
+                // 页根停在旧值/地板值 → 底部被裁。合理性下限只挡未布局/过渡态的垃圾值。
+                if(!(h >= CONTAINER_HEIGHT_SANITY_MIN)){
+                    return;
+                }
+                // 箭头函数内不可 yield;此处 getStore() 渲染期快照即可(下一行本就有 astro 存在性守卫)
+                const store = getStore();
+                const currentHeight = store && store.astro ? store.astro.height : null;
+                const hasExtraPayload = extraPayload && Object.keys(extraPayload).length > 0;
+                if(!hasExtraPayload && currentHeight === h){
+                    return;
+                }
+                dispatch({
+                    type: 'astro/save',
+                    payload:{
+                        height: h,
+                        ...extraPayload,
+                    },
+                });
+            };
+            const syncWorkspaceHeight = (extraPayload = {})=>{
+                // 🔴 2026-08-27 根修:工作区高度**直接量容器**,不再由「视口 ÷ 缩放」推导。
+                //
+                // 事故:旧机(缩放 0.8)全站底部一大条死带。前两版都栽在同一处——把
+                // 「rect 缩放」当成「布局缩放」。真机实测(WebKit,物理视口 720、z=0.8):
+                //     documentElement.clientHeight = 720   ← 仍报物理值
+                //     窗口实际给的布局空间       = 900   ← 720/0.8
+                //     1000px 元素量得 rect 宽    = 1000  ← rect 不反映缩放 ⇒ 探针测得 1
+                // 于是算成 720÷1=720(真值 900),内容只填窗口的 0.8 ⇒ 死带。
+                //
+                // 正解不是「认出引擎再分支」(永远漏掉下一个引擎),而是根本不去问缩放:
+                // #mainContent 是版面的真实容器,它的 clientHeight 天生就是布局域值,
+                // 任何 zoom 语义下都直接成立。顺带把 WorkspaceReservedHeight 这个魔数也
+                // 消掉——容器本身已含掉页头占位,而那个魔数曾因与容器口径差 16px 造成过
+                // 「全站每页底部恒定 16px 空白栏」(同族的第一次事故)。
+                // 决策本身是纯函数(zoomDomain.resolveWorkspaceHeight),便于按三种引擎语义
+                // 当真值表直接单测——原先这段埋在订阅里,任何测试都碰不到。
+                try{
+                    // eslint-disable-next-line global-require
+                    const { measureLayoutViewport, resolveWorkspaceHeight } = require('../utils/zoomDomain');
+                    const el = document.getElementById('mainContent');
+                    const vp = measureLayoutViewport();
+                    return dispatchWorkspaceHeight(resolveWorkspaceHeight({
+                        containerHeight: el ? el.clientHeight : null,
+                        layoutViewportHeight: vp ? vp.height : null,
+                        physicalClientHeight: document.documentElement.clientHeight,
+                        reserved: WorkspaceReservedHeight,
+                        min: MinWorkspaceHeight,
+                    }), extraPayload);
+                }catch(e){ /* 模块异常时走下面老路径,不让版面因此整个失效 */ }
+                return dispatchWorkspaceHeight(
+                    normalizeWorkspaceHeight(document.documentElement.clientHeight),
+                    extraPayload,
+                );
+            };
+
+            let resizeTimer = null;
+            const handleResize = ()=>{
+                if(resizeTimer){
+                    clearTimeout(resizeTimer);
+                }
+                resizeTimer = setTimeout(()=>{
+                    resizeTimer = null;
+                    syncWorkspaceHeight();
+                }, 80);
+            };
+            window.addEventListener('resize', handleResize);
+
+            // [Tahoe 三保险] WKWebView 有 window resize 缺席前科(macOS 26 实报拖窗不重排);
+            // visualViewport 是独立事件源,复用同一 80ms 去抖入口——健康引擎上只是同一次
+            // 变化多进一次去抖=零成本,事件断链引擎上是第三保险(RO 是第二)。
+            let vvHandler = null;
+            try{
+                if(typeof window.visualViewport !== 'undefined' && window.visualViewport){
+                    vvHandler = handleResize;
+                    window.visualViewport.addEventListener('resize', vvHandler);
+                }
+            }catch(e){ vvHandler = null; }
+
+            // 🔴 直接观察容器本身。window resize 只覆盖"窗口变了"这一种成因,漏掉
+            // 缩放档切换、页头高度变化、栏位折叠等——而死带恰恰是"容器变了但没重算"。
+            // 观察容器则不问成因,尺寸一动就跟。resize 监听保留作兜底(容器未挂载时仍需它)。
+            let workspaceRO = null;
+            const attachWorkspaceObserver = ()=>{
+                if(workspaceRO || typeof ResizeObserver === 'undefined'){ return; }
+                const el = document.getElementById('mainContent');
+                if(!el){ return; }
+                try{
+                    workspaceRO = new ResizeObserver(handleResize);
+                    workspaceRO.observe(el);
+                }catch(e){ workspaceRO = null; }
+            };
+            // 容器由 React 稍后挂载,首帧未必在;短暂重试到挂上为止(上限内,失败也只是退回 resize 兜底)
+            attachWorkspaceObserver();
+            let roTries = 0;
+            const roTimer = workspaceRO ? null : setInterval(()=>{
+                roTries += 1;
+                attachWorkspaceObserver();
+                if(workspaceRO || roTries > 40){ clearInterval(roTimer); }
+            }, 100);
+
+            syncWorkspaceHeight({
+                aspects: aspects,
+            });
+            // 启动加载的相位集也要进 app model:pages/index 是从 app 取 aspects 传给
+            // AstroChartMain/AspSelector 的,原先只随上面进了 astro model,app.aspects
+            // 重启后一直停在默认值(被 AspSelector 自读 localStorage 掩盖,但 props 消费者拿到的是错的)。
+            dispatch({
+                type: 'save',
+                payload: { aspects: aspects },
+            });
+
+            dispatch({
+                type: 'getSysTime',
+                payload:{},
+            });                           
+
+            dispatch({
+                type: 'rules/ziwei',
+                payload:{},
+            });                           
+
+            // [R5 S7] 温启直接显示上次的盘:快照按 fetchByChartData 的 record 口径重放(与手动载入命盘同管线)。
+            // 请求层 L1/L3 命中不经就绪门 ⇒ 后端未起也能先画;miss 时排队等后端,与手动出盘无异。
+            // 桌面壳 / 开关 / 7 天窗 / 坏档 全在 loadBootChartSnapshot 内裁决;checkUser 看到 pending/done 就不再起
+            // 「此刻」盘;恢复失败回落「此刻」;用户先动手则丢弃恢复(latest-wins)。
+            try{
+                const bootSnap = loadBootChartSnapshot();
+                if(bootSnap){
+                    // 页签与子页签成对恢复(与页签点击派发同形:currentTab + currentSubTab),避免子页签跨页签错配
+                    dispatch({
+                        type: 'astro/save',
+                        payload: {
+                            bootChartRestore: 'pending',
+                            ...(bootSnap.currentTab ? { currentTab: bootSnap.currentTab, currentSubTab: restoredSubTab(bootSnap.currentTab, bootSnap.currentSubTab) } : {}),
+                        },
+                    });
+                    dispatch({ type: 'astro/fetchByChartData', payload: { ...bootSnap.record, bootRestore: true } });
+                }
+            }catch(e){ /* 恢复是优化不是功能,失败静默回今日路径 */ }
+
+            return ()=>{
+                if(roTimer){ clearInterval(roTimer); }
+                if(workspaceRO){ try{ workspaceRO.disconnect(); }catch(e){ /* ignore */ } workspaceRO = null; }
+                if(vvHandler){
+                    try{ window.visualViewport.removeEventListener('resize', vvHandler); }catch(e){ /* ignore */ }
+                    vvHandler = null;
+                }
+                window.removeEventListener('resize', handleResize);
+                if(resizeTimer){
+                    clearTimeout(resizeTimer);
+                    resizeTimer = null;
+                }
+            };
+        },
+
+    },
+
+
+};
