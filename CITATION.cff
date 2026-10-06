@@ -1,0 +1,233 @@
+cff-version: 1.2.0
+title: Horosa Web App Comprehensively Improved Windows
+message: If you use this repository in academic or technical work, please cite it.
+type: software
+version: 3.11.3
+date-released: 2026-09-30
+authors:
+  - given-names: Horace
+    family-names: Maxwell
+    email: maxwelldhx@gmail.com
+repository-code: https://github.com/Horace-Maxwell/Horosa-Web-App-comprehensively-improved-Windows
+url: https://github.com/Horace-Maxwell/Horosa-Web-App-comprehensively-improved-Windows
+license: AGPL-3.0-only
+abstract: >-
+  Horosa for Windows v3.11.3 beta is a local-first metaphysics workstation. This release is a major
+  upgrade of the AI assistant, from single-turn Q&A to an agent that can act, remember and connect:
+  an action layer (off by default) lets the model create charts and cases, cast headlessly, change
+  chart conventions and display preferences, switch technique pages and load workspaces — read-only
+  or append-only, never deleting or overwriting — behind a three-level approval policy with per-category
+  tightening, trusted profiles, an action ledger with one-click undo and before/after diff previews,
+  and a task center (goal tasks with budgets, scheduled tasks with catch-up policies, automation rules
+  with anti-recursion, desktop notifications). Slash commands with a command palette, @-references
+  for charts, cases, materials, templates and techniques (with pinyin search), skill packs, /compact,
+  /side, checkpoints, personal conventions, fact memory and a natal-owner workspace, multi-model
+  best-of-N comparison, /review, multi-technique orchestration, per-task model routing with structured
+  output in four provider dialects, a local MCP server (resources, prompts, event stream, sessions,
+  dual protocol epochs), external MCP servers over HTTP or stdio with read-only admission, web search
+  across five engines and bounded web fetch, encrypted API keys at rest and redacted diagnostics. A
+  second sweep of every option on every technique page fixes dozens of wiring gaps; AI mounting no
+  longer truncates content and house-ruler tables use whole-sign rulers; divination casting settings
+  now persist across restarts; fourteen-digit direct time entry is added everywhere; zoom-level layout
+  defects and pointer misalignment on canvases are cleared; and long-response freezes, silent request
+  failures and Java log placement are repaired at the root. It builds on the v3.10.0 release, which
+  expanded electional astrology from two to ten techniques (almanac, BaZi, Tai Yi, Zi Wei, Da Liu
+  Ren, unified Three Arts, Seven Governors and Indian muhurta) with about three hundred condition
+  classes judged from the same source as the main charts, raised true-solar-time to NOAA/Meeus
+  precision, gave AI streaming timeouts three-layer semantics and isolated Zi Wei mounting settings.
+  It builds on the v3.9.5 release, which overhauls
+  the horary chart: the judgement elements are wired through end to end, perfection modes and
+  timing are completed, a "whose matter is it" person selector turns the quesited house by the
+  classical derived-house rule (asking about a spouse's career = the tenth from the seventh = the
+  natal fourth) with significators and radicality following along, verdicts run on a dual track
+  with an explicit confidence level, question categories expand to twenty, and the AI snapshot
+  grows to twenty-eight sections. Electional scoring is recalibrated, and a long-standing overlay
+  misplacement at non-default zoom levels is repaired at its root: the desktop shell scales the
+  page through CSS zoom, which splits the page into two coordinate spaces — the rect space, which
+  the browser scales, and the CSS space, which it does not — and the alignment library wrote a
+  displacement computed in the former straight into the latter, so every dropdown, tooltip,
+  popover and date panel drifted whenever the app ran at anything other than the default zoom.
+  The fix measures the effective scale at run time and divides the write-backs by it; at the
+  default zoom the original expressions execute unchanged, so the repair is provably zero-risk
+  for anyone who never changes zoom. It builds on the v3.9.4 release, which was a
+  ground-truth calibration of the technique tables plus display and timing repairs: the Da Liu
+  Ren six-relations table (fire branches under a Yi day-stem now correctly read as offspring),
+  the San He twelve-spirits table (saddle and six-adversity rows were transposed across all 24
+  cells), and the BaZi twelve-growth table (26 corrected cells including a transposed pair that
+  mislocated the Xin day-stem's throne) are each re-derived from first principles and locked by
+  about one thousand cell-by-cell parity tests so no cell can silently drift again; an imagery
+  card that flagged every branch as "poison in the honey" now fires only on the two branches
+  where it actually applies. Fullscreen on the 3D chart and the classics reader is rebuilt on
+  real fullscreen state with enter/exit listeners and true element measurement, so Esc no longer
+  strands the view; Zi Wei luck-cycle flowing-year labels are anchored to the chart's birth-year
+  stem-branch so people born before the year boundary no longer shift by one year; rapid
+  chart-switching and repeated casts can no longer let a stale result overwrite a newer one
+  across the return, profection, solar-arc, flowing-year, zodiacal-releasing, dice and midpoint
+  pages; restoring a full backup now takes effect immediately and survives subsequent settings
+  edits; and the custom ayanamsa epoch flows through progressions, election scanning, the
+  quantified chart and AI analysis. It builds on the v3.9.3 release, a
+  broad expansion of classical Western-astrology settings — about forty new option groups
+  (terms/bounds in five systems including a user-editable custom terms table with separate
+  day/night rows; triplicity rulers in three schemes; sect determination in three definitions;
+  cazimi, combustion and under-the-beams thresholds; void-of-course conventions; Arabic-lot
+  formula variants; orb-doctrine, luminary and angle bonuses, partile criteria and antiscia
+  orbs; fixed-star orbs and five station-detection grades with S/D wheel marks; solar-return
+  and return-house-projection methods; cusp-advancement for house placement; and optional
+  esoteric extensions) — every one of them carried through display, computation, AI mounting,
+  AI export, saved records and backups in one source of truth. The settings drawer is redesigned
+  as full-width grouped cards; the right-panel tables (Almuten and classical scores, planetary
+  hours in three real systems, temperament, Egyptian calendar) now retake and recompute
+  immediately when any classical option changes; progressed-chart pages no longer remember a
+  changed option after it is switched back to default; and quantified, Babylonian, dice and
+  primary-direction charts join the same single-source passthrough with byte-identical default
+  output. Tarot is promoted from the Divination/Other aggregate page to a top-level Divination
+  entry with all saved records, settings and personal card meanings preserved. A mount/archive
+  race that could show derived annotations corrected to the current moment instead of the saved
+  moment after loading a record is rooted out across thirteen sites in eight files, with an
+  automatic gate so newly added techniques cannot reintroduce the pattern. BaZi luck-cycle
+  start-age and year listings on the evaluation pages now come from the same source as the BaZi
+  chart itself. It builds on the earlier release, where in astronomical
+  geomancy the chosen time and place genuinely drive the calculation: a fourth ascendant
+  method casts a real chart for the selected moment and location (the only method that yields
+  cusp degrees, and therefore the only one under which quadrant house division truly applies),
+  a fourth planet-placement method places the seven planets and the nodes by real longitude,
+  quadrant division uses the whole-sign-of-the-cusp convention that works at every latitude
+  including the poles, and when time or place is incomplete the reading falls back to the
+  figure-derived method and says so explicitly rather than silently substituting the current
+  moment. Three defects are repaired: changing any setting or location now re-derives the
+  reading immediately instead of requiring a re-cast (which used to destroy the cast in hand);
+  charts cast by the number-report method are no longer silently re-cast when a school or
+  setting changes; and the two real-sky methods now actually take effect (coordinates were sent
+  in degree-minute notation but parsed as decimal degrees, so they silently fell back). Ce Tian
+  Fei Xing gains yin/yang palace determination, birth-year納音 sixty-cycle tables, and the star
+  commentary and luck-cycle verses for all nineteen configurations. Tarot fills both parallel
+  meaning tracks to the full seventy-eight cards. It builds on the v3.9.0 release, which added a
+  complete new technique and brings six existing modules to full coverage of their source
+  classics, alongside a fidelity fix that affects every divination technique with saved records.
+  The new technique is Ling Qi Jing (the Classic of Numinous Chess), the fifteenth sub-technique
+  under Divination / Other: twelve pieces in three tiers (upper/middle/lower) are cast in one
+  throw, with optional manual placement or direct entry of the three tier values; all 125
+  hexagrams are transcribed from the Siku edition with names, piece counts, image names,
+  attributes, oracle texts, four commentators, case judgments and verdict poems, in both
+  simplified and original-script tracks, with three seed modes for reproducibility and a
+  freeze-on-cast rule so later changes of time or display never silently recast. Six modules
+  gain full classical coverage: Ce Tian Fei Xing (three switchable source readings, an annual
+  outer ring, four spirit tables, twenty-eight miscellaneous star placements, a 470-rule verdict
+  engine and thirteen source texts); Tarot (reversal systems 6 to 13, four parallel meaning
+  tracks, spreads 30 to 65, two court-card systems, eight verdict methods, five timing methods,
+  a single-card detail panel and a daily-course tab); Wu Zhao (125 verdict forms, eight casting
+  methods, classical omen diagrams and a seven-page reading panel); Xiao Cheng Tu (five casting
+  methods, Luoshu nine-palace layout, four timing targets and a full eight-palace text page);
+  Feng Shui (two new complete schools bringing the total to seventeen, deepened form and Li Qi
+  analysis, new remediation and dwelling-judgment schools, a rewritten date-selection module, a
+  three-ring compass with magnetic declination for 358 cities, and automatic geometric detection
+  of indoor inauspicious layouts with explicit evidence); and astronomical geomancy (eleven new
+  reading techniques, eight casting methods and a dedicated planetary board). Help manuals for
+  the four aggregate pages are rebuilt as two-level tabs with one page per technique. The
+  fidelity fix: saving a divination result and re-loading it could previously return a different
+  cast than the one saved; this is repaired across all twenty-one techniques with saved records,
+  together with silent load failures, six entry points that omitted day-boundary and time-method
+  settings, three techniques that were overwritten by a background refetch, and several options
+  that were saved but never read back — plus a new cross-technique gate that fails the build if
+  any technique omits a field. It builds on the v3.8.1 release, which brought
+  "wheel art" to every Western-astrology single chart: the same chart can be drawn in five
+  interchangeable styles — the classic circular wheel plus four square overlay renderings
+  (a Greek nine-cell grid with the first house always the full left-middle cell; a medieval
+  inscribed square with twelve triangles where houses 1/4/7/10 sit at the four edge centers,
+  sign badges riding cusp midpoints on white backing and planets anchored at triangle
+  centroids; a North-Indian diamond board with fixed houses and signs rotating with the
+  ascendant; and a South-Indian fixed-sign grid with house numbers rotating with the
+  ascendant). Planets enter their sign cells with degree-minutes and retrograde marks, Asc/MC
+  are marked in red, and quadrant-system cusp projections are annotated automatically. A
+  two-dropdown chart-style card (outer-ring style + wheel art) applies instantly, syncs
+  app-wide, persists across sessions, and has a same-source entry in the chart-settings
+  drawer. Coverage spans natal, the synastry family, the entire auxiliary-chart family
+  (quantified midpoints and six-house frame, thirteenth/twelfth divisions, reset, harmonic,
+  draconic and dice charts), horary, electional (including astronomical election condition
+  previews), mundane, solar-term charts, firdaria, profections and prenatal syzygy;
+  double-wheel overlays such as progressions/returns stay on the classic wheel. It also fixes
+  auxiliary pages ignoring the chart-style selection, the quantified chart not following
+  global settings, a blank wheel after switching back from square styles, and the hidden-page
+  repaint mechanism failing after a wheel-art change; sign glyphs are now fixed-width so
+  narrow glyphs no longer overlap degree text. It builds on the v3.8.0 release — a
+  broad settings expansion across three techniques: Qi Men Dun Jia gains about forty-two new
+  options including two complete standalone systems (quarter-hour Qi Men, and the day-based
+  Jin Han almanac board), plus eight-spirit selection, central-palace lodging, hidden-stem
+  methods, per-layer flying/rotating assembly for mixed boards, and per-school ju derivation;
+  Zi Wei Dou Shu gains multi-school star-brightness sources with a user-editable brightness
+  table that persists across sessions, switchable four-transformation schools, and about
+  thirty-four regrouped display and luck-cycle options; Liu Yao gains eleven casting and board
+  options with a full audit of all twenty-one left-panel selectors. It also rebuilds the BaZi
+  twelve-growth ("chang sheng") tables to three authoritative schools so all three settings
+  take effect on the main chart, fine chart, and AI snapshot; mirrors every new Qi Men option
+  into the combined Three-Rites page; makes the AI analysis page open immediately by loading
+  its library and session history progressively in the background; and repairs several AI
+  export paths that previously reported no exportable text. It builds on the earlier release
+  that completed Feng Shui to thirteen schools — deepening the
+  six Liqi schools (San He twelve-growth facing / Yellow Spring & Eight Sha / Bo Sha five
+  grades / Chuan Shan Tou Di gold-division lines; Qian Kun Guo Bao nine water positions; Ba
+  Zhai door-master-stove with nine-star six-matters; Xuan Kong combined-facing degree
+  discrimination, annual-meeting judgments and day/hour Zi Bai) and adding five new schools
+  (Fu Xing hexagram-flip water method, Jing Yin Jing Yang Na Jia water method, Xuan Kong Da
+  Gua sixty-four hexagrams, a landform checklist, and date selection) — with a one-screen
+  thirteen-school switcher and an enlarged twenty-four-mountain compass ring; makes celebrity
+  database external links open in the system browser; enriches navigation search keywords
+  across sub-techniques; and permanently fixes the Tai Yi chart / unified Three Arts Tai Yi
+  backend availability (with an institutional every-release availability gate covering every
+  technique service). It builds on the v3.2.0 celebrity chart database — a built-in, fully
+  offline catalog of tens of thousands of high-reliability A/AA-rated celebrity birth records
+  with instant multi-field search and sorting (keyword / sign / gender / birth-year / Rodden
+  rating / category), a detail view with a zodiac chart wheel, life events and category tags,
+  and one-click import into the local chart library so any celebrity can be cast on the
+  astrology / Bazi / Ziwei or any other technique page — and the Western horary chart
+  expansion to five schools. It builds on the v3.1.0 release, which deepened the Xuanxue History module —
+  multi-dimensional
+  faceted search (tradition / dynasty / method / history) with live counts, an astronomical
+  compendium (ten-year celestial-density stacks and a dynasty-by-phenomenon matrix), a
+  year-by-year celestial micro-chronology with original-text and vernacular previews, a
+  geographic map (dynasty heatmap + city ranking), richly-carded figures and phenomena with
+  dynasty-colored tags, and a desk of bookmarks and search history persisted across restarts —
+  and made the planetarium time editable (click the time to jump to any moment, recomputing
+  the whole sky and chart positions live). It builds on the v3.0.0 Xuanxue History module (a standalone tools
+  page compiled from public-domain classics — figures, stories, technique lineages, and
+  celestial-event records — with an offline historical map, a force-directed
+  figure-relationship graph, and a chronological timeline, linked to charting); broad
+  multi-technique school / variant coverage across the fate and divination sets (Zi Wei, BaZi,
+  Seven-Governors / Guo Lao, Western and Vedic astrology; Da Liu Ren, Qi Men, Tai Yi, Liu Yao,
+  Jin Kou Jue, Tarot, Feng Shui, astronomical geomancy) surfaced as options with the default
+  chart byte-for-byte unchanged; charting and AI-report enhancements; and across-the-board
+  performance work. It builds on a classical/Hellenistic astrology augmentation — the natal
+  chart gains a full set of classical parameters (Out of Bounds, phasis with heliacal
+  rising/setting, houses of joy, day/night sect, feral, degree quality and special degrees,
+  the 28 lunar mansions, apogee with number/light trends, monomoiria/ninth-part/Darijan) on a
+  new Classical tab; classical configuration analysis (doryphory, overcoming, degree-besieging,
+  aspect dynamics, topical almutens, accidental-dignity scoring, Behenian/Royal fixed stars,
+  planetary hours, the Egyptian calendar, Babylonian reference stars, eclipse digits,
+  body-part melothesia) on a Configurations tab; a sixteen-rule besiegement analysis; the AI
+  analysis/export snapshot gains a Classical section kept consistent across all four mirrors
+  (export/export-settings/mount/storage); and the Info tab gains a configurations overview.
+  Also a high-latitude Sirius-heliacal-rising calendar fix, and AI-proxy robustness (a
+  streaming worker pool and ParamHash local-cache governance) with the jar rebuilt; every
+  chart computation is otherwise identical to v2.6.6. Builds on the v2.6.6 chart-math
+  correction batch and primary-directions upgrade (Vertex promissor, 3000-year horizon,
+  wire-protocol rev v12) plus its Windows-shell hardening pass, the v2.6.5 synastry interaction-chain
+  rebuild and casting-time mounting expansion, and the v2.6.4 full-stack sidereal zodiac
+  expansion (Western charts get a
+  unified tropical-or-47-ayanāṃśa zodiac selector built on Swiss Ephemeris, propagated
+  through the frontend, eight Java controllers, the Python chart kernel and response echo,
+  and persisted storage; Western sidereal mode shows lunar mansions / Nakshatra), Indian
+  astrology completion (ayanāṃśa 6→47, house systems 4→24), the four-way AI-Analysis
+  synchronization with dual-chart-technique support and AI_EXPORT_SETTINGS_VERSION 23→24
+  auto-migration, AI Analysis "report" generation v1, the startup-robustness pass and the
+  Windows-side issue #21 fix ("本地排盘服务未就绪" now has visible health state, a rich
+  error dialog, longer transparent retry, and an actionable banner). Builds further on prior planetarium
+  projection refinements, the seven Western progression techniques wired into AI analysis,
+  the astrocartography/ACG map, horary/electional charts, the Heluo Lishu completion, AI
+  system-proxy support, the SSE service-stability fix, the global day-boundary /
+  late-zi-hour model, the Ed25519-signed in-app auto-update, 数算 methods, the harmonic
+  chart, clean-machine fixes, and the Windows-only NSIS installer hardening (issue #18 —
+  upgrades over the top no longer fail and no longer require a manual uninstall first) — and
+  AI Analysis rework, astrology modules, traditional Chinese methods, kentang/kin backend
+  integrations, AI-assisted structured export, Python and Java services, and self-contained
+  Windows desktop delivery into one cross-platform release line.
+
